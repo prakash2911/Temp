@@ -1,0 +1,92 @@
+import java.lang.reflect.Field;
+import java.lang.reflect.ParameterizedType;
+import java.util.*;
+
+public class MockDataGenerator {
+
+    private static final Random random = new Random();
+
+    public static <T> T createMockObject(Class<T> clazz) {
+        try {
+            T instance = clazz.getDeclaredConstructor().newInstance();
+            populateFields(instance);
+            return instance;
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to create mock object for " + clazz.getName(), e);
+        }
+    }
+
+    private static void populateFields(Object obj) throws IllegalAccessException {
+        for (Field field : obj.getClass().getDeclaredFields()) {
+            field.setAccessible(true);
+            field.set(obj, generateMockValue(field));
+        }
+    }
+
+    private static Object generateMockValue(Field field) throws IllegalAccessException {
+        Class<?> type = field.getType();
+        if (type.equals(String.class)) {
+            return "Mock" + field.getName();
+        } else if (type.equals(Integer.class) || type.equals(int.class)) {
+            return random.nextInt(100);
+        } else if (type.equals(Long.class) || type.equals(long.class)) {
+            return random.nextLong() % 1000000;
+        } else if (type.equals(Boolean.class) || type.equals(boolean.class)) {
+            return random.nextBoolean();
+        } else if (type.equals(List.class)) {
+            return generateMockList(field);
+        } else if (!type.isPrimitive() && !type.isEnum()) {
+            return createMockObject(type);
+        }
+        return null;
+    }
+
+    private static List<?> generateMockList(Field field) throws IllegalAccessException {
+        ParameterizedType listType = (ParameterizedType) field.getGenericType();
+        Class<?> listClass = (Class<?>) listType.getActualTypeArguments()[0];
+        List<Object> mockList = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            mockList.add(createMockObject(listClass));
+        }
+        return mockList;
+    }
+}
+
+import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
+
+class ResponseServiceTest {
+
+    private final ResponseService responseService = new ResponseService();
+
+    @Test
+    void testConvertResponseToCsv() {
+        // Generate mock Response object
+        Response mockResponse = MockDataGenerator.createMockObject(Response.class);
+
+        // Convert mock Response to CSV
+        String csv = responseService.convertResponseToCsv(mockResponse);
+
+        // Verify CSV format
+        String[] csvParts = csv.split(",");
+        assertEquals(5, csvParts.length);
+
+        // Verify id, name, and email
+        assertNotNull(csvParts[0]);
+        assertTrue(csvParts[1].startsWith("Mock"));
+        assertTrue(csvParts[2].startsWith("Mock"));
+
+        // Verify address
+        String[] addressParts = csvParts[3].split("\\|");
+        assertEquals(3, addressParts.length);
+
+        // Verify previous addresses
+        String[] previousAddresses = csvParts[4].split(";");
+        assertEquals(3, previousAddresses.length);
+        for (String address : previousAddresses) {
+            String[] parts = address.split("\\|");
+            assertEquals(3, parts.length);
+        }
+    }
+}
+
