@@ -1,57 +1,37 @@
-import java.lang.reflect.Field;
-import java.lang.reflect.ParameterizedType;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Random;
+import org.apache.camel.CamelContext;
+import org.apache.camel.ProducerTemplate;
+import org.apache.camel.builder.RouteBuilder;
+import org.apache.camel.impl.DefaultCamelContext;
+import org.apache.camel.dataformat.bindy.csv.BindyCsvDataFormat;
 
-public class MockDataGenerator {
+import java.util.Collections;
 
-    private static final Random random = new Random();
+public class CsvWriter {
 
-    public static <T> T generateMockData(Class<T> clazz) {
-        try {
-            T instance = clazz.getDeclaredConstructor().newInstance();
+    public static void main(String[] args) throws Exception {
+        // Create an instance of your record
+        MyRecord record = new MyRecord();
+        record.setField1("Value1");
+        record.setField2(123);
 
-            for (Field field : clazz.getDeclaredFields()) {
-                field.setAccessible(true);
+        // Set up Camel context and Bindy data format
+        CamelContext context = new DefaultCamelContext();
+        BindyCsvDataFormat bindy = new BindyCsvDataFormat(MyRecord.class);
 
-                Class<?> type = field.getType();
-
-                if (type == String.class) {
-                    field.set(instance, "mock_" + field.getName());
-                } else if (type == int.class || type == Integer.class) {
-                    field.set(instance, random.nextInt(100));
-                } else if (type == long.class || type == Long.class) {
-                    field.set(instance, random.nextLong());
-                } else if (type == boolean.class || type == Boolean.class) {
-                    field.set(instance, random.nextBoolean());
-                } else if (type == double.class || type == Double.class) {
-                    field.set(instance, random.nextDouble());
-                } else if (List.class.isAssignableFrom(type)) {
-                    // Handle lists by creating a list of mock elements
-                    ParameterizedType listType = (ParameterizedType) field.getGenericType();
-                    Class<?> listElementType = (Class<?>) listType.getActualTypeArguments()[0];
-
-                    List<Object> mockList = new ArrayList<>();
-                    for (int i = 0; i < 3; i++) { // Arbitrary number of list elements
-                        if (listElementType == String.class) {
-                            mockList.add("mock_" + field.getName() + "_" + i);
-                        } else {
-                            mockList.add(generateMockData(listElementType));
-                        }
-                    }
-                    field.set(instance, mockList);
-                } else if (!type.isPrimitive() && !type.isEnum() && !type.isArray() && !type.isAssignableFrom(String.class)) {
-                    // If the field is an object, recursively generate mock data for it
-                    Object nestedObject = generateMockData(type);
-                    field.set(instance, nestedObject);
-                }
-                // Add more type cases as needed
+        // Define the route for CSV output
+        context.addRoutes(new RouteBuilder() {
+            @Override
+            public void configure() {
+                from("direct:start")
+                    .marshal(bindy)
+                    .to("file:data/output?fileName=output.csv&fileExist=Append");  // Appends data to the existing file
             }
+        });
 
-            return instance;
-        } catch (Exception e) {
-            throw new RuntimeException("Error generating mock data", e);
-        }
+        // Start Camel context, send data to the route, and stop the context
+        ProducerTemplate template = context.createProducerTemplate();
+        context.start();
+        template.sendBody("direct:start", Collections.singletonList(record));
+        context.stop();
     }
 }
