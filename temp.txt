@@ -1,37 +1,7 @@
-import org.apache.camel.CamelContext;
-import org.apache.camel.ProducerTemplate;
-import org.apache.camel.builder.RouteBuilder;
-import org.apache.camel.impl.DefaultCamelContext;
-import org.apache.camel.dataformat.bindy.csv.BindyCsvDataFormat;
-
-import java.util.Collections;
-
-public class CsvWriter {
-
-    public static void main(String[] args) throws Exception {
-        // Create an instance of your record
-        MyRecord record = new MyRecord();
-        record.setField1("Value1");
-        record.setField2(123);
-
-        // Set up Camel context and Bindy data format
-        CamelContext context = new DefaultCamelContext();
-        BindyCsvDataFormat bindy = new BindyCsvDataFormat(MyRecord.class);
-
-        // Define the route for CSV output
-        context.addRoutes(new RouteBuilder() {
-            @Override
-            public void configure() {
-                from("direct:start")
-                    .marshal(bindy)
-                    .to("file:data/output?fileName=output.csv&fileExist=Append");  // Appends data to the existing file
-            }
-        });
-
-        // Start Camel context, send data to the route, and stop the context
-        ProducerTemplate template = context.createProducerTemplate();
-        context.start();
-        template.sendBody("direct:start", Collections.singletonList(record));
-        context.stop();
-    }
+private List<ThorRequest> addRecordsToList(final List<OdsPosition> positions) {
+    return positions.stream()
+        .filter(n -> n.getInstrument() != null && n.getInstrument().getUniqueReference() != null)  // Filter out nulls
+        .map(n -> new ThorRequest(n.getInstrument().getUniqueReference(), THOR_REQUEST_TYPE))
+        .distinct()
+        .collect(Collectors.toList());
 }
