@@ -1,7 +1,19 @@
-private List<ThorRequest> addRecordsToList(final List<OdsPosition> positions) {
-    return positions.stream()
-        .filter(n -> n.getInstrument() != null && n.getInstrument().getUniqueReference() != null)  // Filter out nulls
-        .map(n -> new ThorRequest(n.getInstrument().getUniqueReference(), THOR_REQUEST_TYPE))
-        .distinct()
-        .collect(Collectors.toList());
-}
+1)I migrated five services using Java Spring Boot from a pagination-based system to a report endpoint that retrieves all data in one go, aligning with Barclays' value of **Excellence** by simplifying and streamlining processes. This improved the accuracy and efficiency of data retrieval, ensuring consistent outcomes for clients, in line with our commitment to **Service** and **Integrity**. Additionally, I developed SFTP scripts for secure file transfers between UTIF and IMAtch. Currently, I am also working on a frontend to assist with post-implementation testing, ensuring a smooth transition and reliable results, reflecting **Stewardship** in my work.
+
+
+2)In my recent projects, I have prioritized delivering quality products and services that align with Barclays' strategic goals. By migrating five services to a report endpoint, I transitioned from a cumbersome pagination approach to a streamlined method that retrieves all data in a single call. This shift not only enhances operational efficiency but also strengthens our ability to meet risk and control requirements effectively.
+Moreover, I developed secure SFTP scripts for file transfers between UTIF and IMAtch, addressing underlying issues and driving long-term sustainability. Currently, I am focusing on a frontend solution for post-implementation testing, which will enhance our service delivery and build long-term client relationships. These initiatives aim to enhance our reputation and create a positive impact on the communities we serve, reflecting Barclays’ commitment to excellence.
+
+
+3)In my role, I ensure precision in operations, risk management, and controls by adhering strictly to relevant rules, regulations, and codes of conduct. For example, in migrating five services to the report endpoint, I established streamlined processes that enhance data accuracy and reliability, ensuring compliance with Barclays’ operational standards. 
+I actively follow and improve our control mechanisms by proactively identifying and managing risks associated with these processes. This includes implementing secure SFTP scripts for file transfers, where I have carefully evaluated and escalated any potential risks, ensuring that our practices align with security protocols and regulatory requirements.
+As I develop the frontend for post-implementation testing, my focus remains on delivering accurate and reliable outcomes that adhere to the necessary policies and limits. By continuously strengthening our controls and maintaining operational integrity, I contribute to the long-term sustainability of our services and build trust with our clients and stakeholders.
+
+
+4)In my role, I am deeply committed to promoting diversity of thought and fostering an inclusive culture within our team. I believe that bringing together individuals from diverse backgrounds, experiences, and perspectives is essential for driving innovation and challenging the status quo. For example, during the migration of services to the report endpoint, I actively sought input from colleagues with different skill sets, which led to more creative solutions and improvements in our processes.
+
+By embracing diversity and equity, I strive to create an environment where everyone feels valued and empowered to share their ideas. I prioritize collaboration and open dialogue, ensuring that all voices are heard and considered. This inclusive approach not only enhances problem-solving but also contributes to a supportive workplace culture that promotes recognition and wellbeing for all team members.
+
+As I work on developing the frontend for post-implementation testing, I am dedicated to integrating diverse perspectives and feedback, ensuring that our solutions meet the needs of all clients and customers. By championing equity and allyship through my actions, I help build a culture that drives better outcomes for our clients and reinforces Barclays' commitment to diversity and inclusion.
+
+5)I prioritize designing world-class products and services with our clients at the center, ensuring we deliver quality outcomes that provide fair value and avoid foreseeable harm. I focus on supporting vulnerable circumstances by balancing short-term needs with long-term sustainability, aligning our efforts with Barclays' ESG (Environmental, Social, and Corporate Governance) outcomes. As I develop the frontend for post-implementation testing, I incorporate stakeholder feedback to create solutions that are accessible and beneficial for all clients.
