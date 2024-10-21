@@ -29,3 +29,13 @@ Additionally, I developed secure SFTP scripts to improve file transfer reliabili
 To manage risk and strengthen controls, I have implemented several key initiatives. I focused on streamlining processes to reduce complexity, which improved accuracy and reliability in our operations. Additionally, I developed secure solutions for file transfers, ensuring compliance with security protocols and minimizing potential risks.
 
 I also proactively identified and addressed risks throughout our projects, fostering a culture of open dialogue about risk management within the team. These efforts collectively enhance operational integrity and align with our commitment to strong risk management practices.
+
+
+In my role, I have made significant strides in enhancing operational efficiency and delivering quality outcomes. By migrating five services to a report endpoint, I streamlined data retrieval processes, improving accuracy and reducing complexity. I actively promoted diversity of thought within the team, encouraging collaboration and innovative problem-solving, which has led to better solutions for our clients.
+
+To manage risk and strengthen controls, I focused on ensuring compliance with relevant regulations and proactively addressing potential risks throughout our projects. Additionally, I am currently developing a frontend for post-implementation testing to further enhance our service delivery. Overall, my contributions align with Barclays' strategic priorities, reinforcing our commitment to excellence, sustainability, and strong risk management practices.
+
+In summary, my contributions over the past few months have focused on driving operational efficiency, fostering a culture of inclusivity, and enhancing risk management practices. By migrating services to a more streamlined report endpoint, I improved data accuracy and delivery for our clients while promoting diverse perspectives within the team. 
+
+My proactive approach to identifying and managing risks has strengthened our controls and ensured compliance with relevant regulations. As I continue to work on the frontend for post-implementation testing, I remain dedicated to delivering quality outcomes that align with Barclays' strategic priorities. I
+am committed to upholding our values of excellence, sustainability, and client-centric service as we strive to make a positive impact in our communities.
