@@ -35,30 +35,62 @@ const CSVFileUploader = () => {
       return;
     }
 
-    Papa.parse(selectedFile, {
-      complete: (result) => {
-        if (result.data && result.data.length > 0) {
-          const columns = result.data[0].map(col => ({
-            title: col,
-            dataIndex: col,
-            key: col,
-          }));
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      Papa.parse(event.target.result, {
+        complete: (result) => {
+          try {
+            if (result.data && result.data.length > 0) {
+              // Get the number of columns from the first row
+              const columnCount = result.data[0].length;
+              
+              // Create default column names (Column1, Column2, etc.)
+              const columns = Array.from({ length: columnCount }, (_, index) => ({
+                title: `Column${index + 1}`,
+                dataIndex: `column${index + 1}`,
+                key: `column${index + 1}`,
+                render: (text) => text || '-' // Handle empty values
+              }));
 
-          const data = result.data.slice(1).map((row, index) => {
-            const rowData = {};
-            row.forEach((cell, cellIndex) => {
-              rowData[result.data[0][cellIndex]] = cell;
-            });
-            rowData.key = index;
-            return rowData;
-          });
+              // Process all rows as data
+              const dataRows = result.data
+                .filter(row => row.some(cell => cell)) // Filter out empty rows
+                .map((row, rowIndex) => {
+                  const rowData = {
+                    key: rowIndex
+                  };
+                  // Map each cell to its corresponding column
+                  row.forEach((cell, cellIndex) => {
+                    rowData[`column${cellIndex + 1}`] = cell;
+                  });
+                  return rowData;
+                });
 
-          setCsvData({ columns, data });
-          setPreviewVisible(true);
+              setCsvData({
+                columns,
+                data: dataRows
+              });
+              setPreviewVisible(true);
+            } else {
+              message.error('No data found in CSV file');
+            }
+          } catch (error) {
+            console.error('Error processing CSV:', error);
+            message.error('Error processing CSV file');
+          }
+        },
+        error: (error) => {
+          console.error('Error parsing CSV:', error);
+          message.error('Error parsing CSV file');
         }
-      },
-      header: true,
-    });
+      });
+    };
+
+    reader.onerror = () => {
+      message.error('Error reading file');
+    };
+
+    reader.readAsText(selectedFile);
   };
 
   const handleUpload = async () => {
@@ -97,6 +129,7 @@ const CSVFileUploader = () => {
       setSelectedFile(null);
       setFileList([]);
     },
+    accept: '.csv'
   };
 
   return (
@@ -141,6 +174,10 @@ const CSVFileUploader = () => {
           columns={csvData.columns}
           dataSource={csvData.data}
           scroll={{ x: true, y: 400 }}
+          pagination={{
+            pageSize: 10,
+            total: csvData.data.length
+          }}
         />
       </Modal>
     </div>
