@@ -4,20 +4,33 @@ import {
   Button, 
   Modal, 
   message, 
-  Table 
+  Table, 
+  UploadFile
 } from 'antd';
 import { InboxOutlined } from '@ant-design/icons';
 import Papa from 'papaparse';
+import type { UploadProps } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
 
 const { Dragger } = Upload;
 
-const CSVFileUploader = () => {
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [previewVisible, setPreviewVisible] = useState(false);
-  const [csvData, setCsvData] = useState({ columns: [], data: [] });
-  const [fileList, setFileList] = useState([]);
+interface TableDataType {
+  key: number;
+  [key: string]: string | number; // Allow dynamic column names
+}
 
-  const handleFileSelect = (file) => {
+interface CsvDataType {
+  columns: ColumnsType<TableDataType>;
+  data: TableDataType[];
+}
+
+const CSVFileUploader: React.FC = () => {
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [previewVisible, setPreviewVisible] = useState<boolean>(false);
+  const [csvData, setCsvData] = useState<CsvDataType>({ columns: [], data: [] });
+  const [fileList, setFileList] = useState<UploadFile[]>([]);
+
+  const handleFileSelect = (file: File): false => {
     // Check if file is CSV
     if (file.type !== 'text/csv') {
       message.error('Please upload CSV file only!');
@@ -29,34 +42,39 @@ const CSVFileUploader = () => {
     return false; // Prevent default upload behavior
   };
 
-  const handlePreview = () => {
+  const handlePreview = (): void => {
     if (!selectedFile) {
       message.error('Please select a file first!');
       return;
     }
 
     const reader = new FileReader();
-    reader.onload = (event) => {
-      Papa.parse(event.target.result, {
+    reader.onload = (event: ProgressEvent<FileReader>) => {
+      if (!event.target?.result) return;
+
+      Papa.parse(event.target.result.toString(), {
         complete: (result) => {
           try {
             if (result.data && result.data.length > 0) {
               // Get the number of columns from the first row
-              const columnCount = result.data[0].length;
+              const columnCount = (result.data[0] as string[]).length;
               
               // Create default column names (Column1, Column2, etc.)
-              const columns = Array.from({ length: columnCount }, (_, index) => ({
-                title: `Column${index + 1}`,
-                dataIndex: `column${index + 1}`,
-                key: `column${index + 1}`,
-                render: (text) => text || '-' // Handle empty values
-              }));
+              const columns: ColumnsType<TableDataType> = Array.from(
+                { length: columnCount }, 
+                (_, index) => ({
+                  title: `Column${index + 1}`,
+                  dataIndex: `column${index + 1}`,
+                  key: `column${index + 1}`,
+                  render: (text: string) => text || '-' // Handle empty values
+                })
+              );
 
               // Process all rows as data
-              const dataRows = result.data
+              const dataRows: TableDataType[] = (result.data as string[][])
                 .filter(row => row.some(cell => cell)) // Filter out empty rows
                 .map((row, rowIndex) => {
-                  const rowData = {
+                  const rowData: TableDataType = {
                     key: rowIndex
                   };
                   // Map each cell to its corresponding column
@@ -79,7 +97,7 @@ const CSVFileUploader = () => {
             message.error('Error processing CSV file');
           }
         },
-        error: (error) => {
+        error: (error: Error) => {
           console.error('Error parsing CSV:', error);
           message.error('Error parsing CSV file');
         }
@@ -93,7 +111,7 @@ const CSVFileUploader = () => {
     reader.readAsText(selectedFile);
   };
 
-  const handleUpload = async () => {
+  const handleUpload = async (): Promise<void> => {
     if (!selectedFile) {
       message.error('Please select a file first!');
       return;
@@ -116,11 +134,12 @@ const CSVFileUploader = () => {
         message.error('Upload failed!');
       }
     } catch (error) {
-      message.error('Error uploading file: ' + error.message);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      message.error('Error uploading file: ' + errorMessage);
     }
   };
 
-  const draggerProps = {
+  const draggerProps: UploadProps = {
     name: 'file',
     multiple: false,
     fileList,
