@@ -1,73 +1,150 @@
-//@ts-nocheck
-const url =
-  import.meta.env.MODE === "development"
-    ? "http://localhost:3000"
-    : import.meta.env.VITE_BACKEND_API_BASE_URL;
+import React, { useState } from 'react';
+import { 
+  Upload, 
+  Button, 
+  Modal, 
+  message, 
+  Table 
+} from 'antd';
+import { InboxOutlined } from '@ant-design/icons';
+import Papa from 'papaparse';
 
-const token = `Bearer ${
-  sessionStorage.getItem("sessionToken")
-    ? sessionStorage.getItem("sessionToken")
-    : ""
-}`;
+const { Dragger } = Upload;
 
-export default class APIService {
-  static async PostFormData(body: any, route: string) {
-    try {
-      Response = await fetch(url.concat(route), {
-        method: "POST",
-        headers: {
-          // "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
-          Authorization: token,
-          // "authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6InVzZXJAZ21haWwuY29tIiwidXNlcnR5cGUiOiJhZG1pbiIsImlhdCI6MTY5NjQyNDk0MiwiZXhwIjoxNjk2NDI4NTQyfQ.OmSmhz6TAF6av9yZD3RS0V560AwRI9S-X2wWAN1rLGA",
-          // Accept: "application/json",
-        },
-        body: body,
-      }).then(async (res) => {
-        return res;
-      });
-      return await Response.json();
-    } catch (error) {
-      return console.log(error);
-    }
-  }
+const CSVFileUploader = () => {
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [previewVisible, setPreviewVisible] = useState(false);
+  const [csvData, setCsvData] = useState({ columns: [], data: [] });
+  const [fileList, setFileList] = useState([]);
 
-  static async PostData(body: any, route: string) {
-    
-    try {
-      Response = await fetch(url.concat(route), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
-          // "Authorization": "Bearer " + sessionStorage.getItem("sessionToken") ? sessionStorage.getItem("sessionToken") : " ",
-          authorization: token,
-          Accept: "application/json",
-        },
-        body: JSON.stringify(body),
-      }).then(async (res) => {
-        return res;
-      });
-      return await Response.json();
-    } catch (error) {
-      return console.log(error);
+  const handleFileSelect = (file) => {
+    // Check if file is CSV
+    if (file.type !== 'text/csv') {
+      message.error('Please upload CSV file only!');
+      return false;
     }
-  }
-  static async GetData(route: string) {
-    try {
-      Response = await fetch(url.concat(route), {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
-          Accept: "application/json",
-        },
-      }).then(async (res) => {
-        return res;
-      });
-      return await Response.json();
-    } catch (error) {
-      return console.log(error);
+
+    setSelectedFile(file);
+    setFileList([file]);
+    return false; // Prevent default upload behavior
+  };
+
+  const handlePreview = () => {
+    if (!selectedFile) {
+      message.error('Please select a file first!');
+      return;
     }
-  }
-}
+
+    Papa.parse(selectedFile, {
+      complete: (result) => {
+        if (result.data && result.data.length > 0) {
+          const columns = result.data[0].map(col => ({
+            title: col,
+            dataIndex: col,
+            key: col,
+          }));
+
+          const data = result.data.slice(1).map((row, index) => {
+            const rowData = {};
+            row.forEach((cell, cellIndex) => {
+              rowData[result.data[0][cellIndex]] = cell;
+            });
+            rowData.key = index;
+            return rowData;
+          });
+
+          setCsvData({ columns, data });
+          setPreviewVisible(true);
+        }
+      },
+      header: true,
+    });
+  };
+
+  const handleUpload = async () => {
+    if (!selectedFile) {
+      message.error('Please select a file first!');
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+
+    try {
+      const response = await fetch('YOUR_SPRING_BOOT_API_ENDPOINT', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (response.ok) {
+        message.success('File uploaded successfully!');
+        setSelectedFile(null);
+        setFileList([]);
+      } else {
+        message.error('Upload failed!');
+      }
+    } catch (error) {
+      message.error('Error uploading file: ' + error.message);
+    }
+  };
+
+  const draggerProps = {
+    name: 'file',
+    multiple: false,
+    fileList,
+    beforeUpload: handleFileSelect,
+    onRemove: () => {
+      setSelectedFile(null);
+      setFileList([]);
+    },
+  };
+
+  return (
+    <div className="p-6">
+      <Dragger {...draggerProps}>
+        <p className="ant-upload-drag-icon">
+          <InboxOutlined />
+        </p>
+        <p className="ant-upload-text">
+          Click or drag CSV file to this area to upload
+        </p>
+        <p className="ant-upload-hint">
+          Support for single CSV file upload only
+        </p>
+      </Dragger>
+
+      <div className="mt-4 flex gap-4">
+        <Button 
+          type="primary" 
+          onClick={handlePreview}
+          disabled={!selectedFile}
+        >
+          Preview
+        </Button>
+        <Button 
+          type="primary" 
+          onClick={handleUpload}
+          disabled={!selectedFile}
+        >
+          Upload
+        </Button>
+      </div>
+
+      <Modal
+        title="CSV Preview"
+        open={previewVisible}
+        onCancel={() => setPreviewVisible(false)}
+        width={800}
+        footer={null}
+      >
+        <Table
+          columns={csvData.columns}
+          dataSource={csvData.data}
+          scroll={{ x: true, y: 400 }}
+        />
+      </Modal>
+    </div>
+  );
+};
+
+export default CSVFileUploader;
