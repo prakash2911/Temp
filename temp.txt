@@ -9,6 +9,7 @@ import {
 } from 'antd';
 import { InboxOutlined } from '@ant-design/icons';
 import Papa from 'papaparse';
+import * as XLSX from 'xlsx';
 import type { UploadProps } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 
@@ -16,7 +17,7 @@ const { Dragger } = Upload;
 
 interface TableDataType {
   key: number;
-  [key: string]: string | number; // Allow dynamic column names
+  [key: string]: string | number;
 }
 
 interface CsvDataType {
@@ -24,91 +25,173 @@ interface CsvDataType {
   data: TableDataType[];
 }
 
-const CSVFileUploader: React.FC = () => {
+const FileUploader: React.FC = () => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewVisible, setPreviewVisible] = useState<boolean>(false);
   const [csvData, setCsvData] = useState<CsvDataType>({ columns: [], data: [] });
   const [fileList, setFileList] = useState<UploadFile[]>([]);
 
+  const processExcelFile = (file: File): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e: ProgressEvent<FileReader>) => {
+        try {
+          const data = e.target?.result;
+          const workbook = XLSX.read(data, { type: 'binary' });
+          const sheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[sheetName];
+          const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+          if (jsonData && jsonData.length > 0) {
+            const columnCount = (jsonData[0] as string[]).length;
+            
+            const columns: ColumnsType<TableDataType> = Array.from(
+              { length: columnCount }, 
+              (_, index) => ({
+                title: `Column${index + 1}`,
+                dataIndex: `column${index + 1}`,
+                key: `column${index + 1}`,
+                render: (text: string) => text || '-'
+              })
+            );
+
+            const dataRows: TableDataType[] = (jsonData as string[][])
+              .filter(row => row.some(cell => cell))
+              .map((row, rowIndex) => {
+                const rowData: TableDataType = {
+                  key: rowIndex
+                };
+                row.forEach((cell, cellIndex) => {
+                  rowData[`column${cellIndex + 1}`] = cell;
+                });
+                return rowData;
+              });
+
+            setCsvData({
+              columns,
+              data: dataRows
+            });
+            resolve();
+          } else {
+            reject(new Error('No data found in file'));
+          }
+        } catch (error) {
+          reject(error);
+        }
+      };
+      reader.onerror = () => reject(new Error('Error reading file'));
+      reader.readAsBinaryString(file);
+    });
+  };
+
+  const processCsvFile = (file: File): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (event: ProgressEvent<FileReader>) => {
+        if (!event.target?.result) {
+          reject(new Error('No file content'));
+          return;
+        }
+
+        Papa.parse(event.target.result.toString(), {
+          complete: (result) => {
+            try {
+              if (result.data && result.data.length > 0) {
+                const columnCount = (result.data[0] as string[]).length;
+                
+                const columns: ColumnsType<TableDataType> = Array.from(
+                  { length: columnCount }, 
+                  (_, index) => ({
+                    title: `Column${index + 1}`,
+                    dataIndex: `column${index + 1}`,
+                    key: `column${index + 1}`,
+                    render: (text: string) => text || '-'
+                  })
+                );
+
+                const dataRows: TableDataType[] = (result.data as string[][])
+                  .filter(row => row.some(cell => cell))
+                  .map((row, rowIndex) => {
+                    const rowData: TableDataType = {
+                      key: rowIndex
+                    };
+                    row.forEach((cell, cellIndex) => {
+                      rowData[`column${cellIndex + 1}`] = cell;
+                    });
+                    return rowData;
+                  });
+
+                setCsvData({
+                  columns,
+                  data: dataRows
+                });
+                resolve();
+              } else {
+                reject(new Error('No data found in CSV file'));
+              }
+            } catch (error) {
+              reject(error);
+            }
+          },
+          error: (error: Error) => {
+            reject(error);
+          }
+        });
+      };
+      reader.onerror = () => reject(new Error('Error reading file'));
+      reader.readAsText(file);
+    });
+  };
+
   const handleFileSelect = (file: File): false => {
-    // Check if file is CSV
-    if (file.type !== 'text/csv') {
-      message.error('Please upload CSV file only!');
+    // Check file type
+    const isCsv = file.type === 'text/csv';
+    const isExcel = 
+      file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || 
+      file.type === 'application/vnd.ms-excel';
+
+    if (!isCsv && !isExcel) {
+      message.error('Please upload CSV or XLSX file only!');
       return false;
     }
 
+    // Create UploadFile object with required properties
+    const uploadFile: UploadFile = {
+      uid: `-${Date.now()}`, // Generate unique ID
+      name: file.name,
+      status: 'done',
+      size: file.size,
+      type: file.type,
+      originFileObj: file
+    };
+
     setSelectedFile(file);
-    setFileList([file]);
-    return false; // Prevent default upload behavior
+    setFileList([uploadFile]);
+    return false;
   };
 
-  const handlePreview = (): void => {
+  const handlePreview = async (): Promise<void> => {
     if (!selectedFile) {
       message.error('Please select a file first!');
       return;
     }
 
-    const reader = new FileReader();
-    reader.onload = (event: ProgressEvent<FileReader>) => {
-      if (!event.target?.result) return;
+    try {
+      const isExcel = 
+        selectedFile.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || 
+        selectedFile.type === 'application/vnd.ms-excel';
 
-      Papa.parse(event.target.result.toString(), {
-        complete: (result) => {
-          try {
-            if (result.data && result.data.length > 0) {
-              // Get the number of columns from the first row
-              const columnCount = (result.data[0] as string[]).length;
-              
-              // Create default column names (Column1, Column2, etc.)
-              const columns: ColumnsType<TableDataType> = Array.from(
-                { length: columnCount }, 
-                (_, index) => ({
-                  title: `Column${index + 1}`,
-                  dataIndex: `column${index + 1}`,
-                  key: `column${index + 1}`,
-                  render: (text: string) => text || '-' // Handle empty values
-                })
-              );
+      if (isExcel) {
+        await processExcelFile(selectedFile);
+      } else {
+        await processCsvFile(selectedFile);
+      }
 
-              // Process all rows as data
-              const dataRows: TableDataType[] = (result.data as string[][])
-                .filter(row => row.some(cell => cell)) // Filter out empty rows
-                .map((row, rowIndex) => {
-                  const rowData: TableDataType = {
-                    key: rowIndex
-                  };
-                  // Map each cell to its corresponding column
-                  row.forEach((cell, cellIndex) => {
-                    rowData[`column${cellIndex + 1}`] = cell;
-                  });
-                  return rowData;
-                });
-
-              setCsvData({
-                columns,
-                data: dataRows
-              });
-              setPreviewVisible(true);
-            } else {
-              message.error('No data found in CSV file');
-            }
-          } catch (error) {
-            console.error('Error processing CSV:', error);
-            message.error('Error processing CSV file');
-          }
-        },
-        error: (error: Error) => {
-          console.error('Error parsing CSV:', error);
-          message.error('Error parsing CSV file');
-        }
-      });
-    };
-
-    reader.onerror = () => {
-      message.error('Error reading file');
-    };
-
-    reader.readAsText(selectedFile);
+      setPreviewVisible(true);
+    } catch (error) {
+      console.error('Error processing file:', error);
+      message.error('Error processing file');
+    }
   };
 
   const handleUpload = async (): Promise<void> => {
@@ -148,7 +231,7 @@ const CSVFileUploader: React.FC = () => {
       setSelectedFile(null);
       setFileList([]);
     },
-    accept: '.csv'
+    accept: '.csv,.xlsx,.xls'
   };
 
   return (
@@ -158,10 +241,10 @@ const CSVFileUploader: React.FC = () => {
           <InboxOutlined />
         </p>
         <p className="ant-upload-text">
-          Click or drag CSV file to this area to upload
+          Click or drag file to this area to upload
         </p>
         <p className="ant-upload-hint">
-          Support for single CSV file upload only
+          Support for CSV and Excel files only
         </p>
       </Dragger>
 
@@ -183,7 +266,7 @@ const CSVFileUploader: React.FC = () => {
       </div>
 
       <Modal
-        title="CSV Preview"
+        title="File Preview"
         open={previewVisible}
         onCancel={() => setPreviewVisible(false)}
         width={800}
@@ -203,4 +286,4 @@ const CSVFileUploader: React.FC = () => {
   );
 };
 
-export default CSVFileUploader;
+export default FileUploader;
