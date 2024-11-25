@@ -1,289 +1,349 @@
-import React, { useState } from 'react';
-import { 
-  Upload, 
-  Button, 
-  Modal, 
-  message, 
-  Table, 
-  UploadFile
-} from 'antd';
-import { InboxOutlined } from '@ant-design/icons';
-import Papa from 'papaparse';
-import * as XLSX from 'xlsx';
-import type { UploadProps } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
+package com.example.fileupload;
 
-const { Dragger } = Upload;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
 
-interface TableDataType {
-  key: number;
-  [key: string]: string | number;
+@SpringBootApplication
+public class FileUploadApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(FileUploadApplication.class, args);
+    }
 }
 
-interface CsvDataType {
-  columns: ColumnsType<TableDataType>;
-  data: TableDataType[];
-}
+// Controller
+package com.example.fileupload.controller;
 
-const FileUploader: React.FC = () => {
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [previewVisible, setPreviewVisible] = useState<boolean>(false);
-  const [csvData, setCsvData] = useState<CsvDataType>({ columns: [], data: [] });
-  const [fileList, setFileList] = useState<UploadFile[]>([]);
+import com.example.fileupload.service.FileProcessingService;
+import com.example.fileupload.dto.FileUploadResponse;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
-  const processExcelFile = (file: File): Promise<void> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = (e: ProgressEvent<FileReader>) => {
+@RestController
+@RequestMapping("/api/files")
+@CrossOrigin(origins = "*")
+public class FileUploadController {
+
+    @Autowired
+    private FileProcessingService fileProcessingService;
+
+    @PostMapping("/upload")
+    public ResponseEntity<FileUploadResponse> uploadFile(@RequestParam("file") MultipartFile file) {
         try {
-          const data = e.target?.result;
-          const workbook = XLSX.read(data, { type: 'binary' });
-          const sheetName = workbook.SheetNames[0];
-          const worksheet = workbook.Sheets[sheetName];
-          const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-
-          if (jsonData && jsonData.length > 0) {
-            const columnCount = (jsonData[0] as string[]).length;
-            
-            const columns: ColumnsType<TableDataType> = Array.from(
-              { length: columnCount }, 
-              (_, index) => ({
-                title: `Column${index + 1}`,
-                dataIndex: `column${index + 1}`,
-                key: `column${index + 1}`,
-                render: (text: string) => text || '-'
-              })
-            );
-
-            const dataRows: TableDataType[] = (jsonData as string[][])
-              .filter(row => row.some(cell => cell))
-              .map((row, rowIndex) => {
-                const rowData: TableDataType = {
-                  key: rowIndex
-                };
-                row.forEach((cell, cellIndex) => {
-                  rowData[`column${cellIndex + 1}`] = cell;
-                });
-                return rowData;
-              });
-
-            setCsvData({
-              columns,
-              data: dataRows
-            });
-            resolve();
-          } else {
-            reject(new Error('No data found in file'));
-          }
-        } catch (error) {
-          reject(error);
+            int processedRows = fileProcessingService.processAndSaveFile(file);
+            return ResponseEntity.ok(new FileUploadResponse(
+                "Success",
+                String.format("File processed successfully. %d records imported.", processedRows)
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.badRequest()
+                .body(new FileUploadResponse("Error", e.getMessage()));
         }
-      };
-      reader.onerror = () => reject(new Error('Error reading file'));
-      reader.readAsBinaryString(file);
-    });
-  };
+    }
+}
 
-  const processCsvFile = (file: File): Promise<void> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = (event: ProgressEvent<FileReader>) => {
-        if (!event.target?.result) {
-          reject(new Error('No file content'));
-          return;
+// Service
+package com.example.fileupload.service;
+
+import com.example.fileupload.entity.IdStatus;
+import com.example.fileupload.repository.IdStatusRepository;
+import org.apache.poi.ss.usermodel.*;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+
+@Service
+public class FileProcessingService {
+
+    @Autowired
+    private IdStatusRepository idStatusRepository;
+
+    public int processAndSaveFile(MultipartFile file) throws Exception {
+        List<String> ids;
+        String fileName = file.getOriginalFilename();
+
+        if (fileName.endsWith(".csv")) {
+            ids = processCsvFile(file);
+        } else if (fileName.endsWith(".xlsx") || fileName.endsWith(".xls")) {
+            ids = processExcelFile(file);
+        } else {
+            throw new IllegalArgumentException("Unsupported file format");
         }
 
-        Papa.parse(event.target.result.toString(), {
-          complete: (result) => {
-            try {
-              if (result.data && result.data.length > 0) {
-                const columnCount = (result.data[0] as string[]).length;
-                
-                const columns: ColumnsType<TableDataType> = Array.from(
-                  { length: columnCount }, 
-                  (_, index) => ({
-                    title: `Column${index + 1}`,
-                    dataIndex: `column${index + 1}`,
-                    key: `column${index + 1}`,
-                    render: (text: string) => text || '-'
-                  })
-                );
+        return saveDataToDatabase(ids);
+    }
 
-                const dataRows: TableDataType[] = (result.data as string[][])
-                  .filter(row => row.some(cell => cell))
-                  .map((row, rowIndex) => {
-                    const rowData: TableDataType = {
-                      key: rowIndex
-                    };
-                    row.forEach((cell, cellIndex) => {
-                      rowData[`column${cellIndex + 1}`] = cell;
-                    });
-                    return rowData;
-                  });
-
-                setCsvData({
-                  columns,
-                  data: dataRows
-                });
-                resolve();
-              } else {
-                reject(new Error('No data found in CSV file'));
-              }
-            } catch (error) {
-              reject(error);
+    private List<String> processCsvFile(MultipartFile file) throws Exception {
+        List<String> ids = new ArrayList<>();
+        try (BufferedReader br = new BufferedReader(new InputStreamReader(file.getInputStream()))) {
+            String line;
+            // Skip header if exists
+            boolean isFirstLine = true;
+            while ((line = br.readLine()) != null) {
+                if (isFirstLine) {
+                    isFirstLine = false;
+                    continue;
+                }
+                if (!line.trim().isEmpty()) {
+                    ids.add(line.trim());
+                }
             }
-          },
-          error: (error: Error) => {
-            reject(error);
-          }
-        });
-      };
-      reader.onerror = () => reject(new Error('Error reading file'));
-      reader.readAsText(file);
-    });
-  };
-
-  const handleFileSelect = (file: File): false => {
-    // Check file type
-    const isCsv = file.type === 'text/csv';
-    const isExcel = 
-      file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || 
-      file.type === 'application/vnd.ms-excel';
-
-    if (!isCsv && !isExcel) {
-      message.error('Please upload CSV or XLSX file only!');
-      return false;
+        }
+        return ids;
     }
 
-    // Create UploadFile object with required properties
-    const uploadFile: UploadFile = {
-      uid: `-${Date.now()}`, // Generate unique ID
-      name: file.name,
-      status: 'done',
-      size: file.size,
-      type: file.type,
-      originFileObj: file
-    };
-
-    setSelectedFile(file);
-    setFileList([uploadFile]);
-    return false;
-  };
-
-  const handlePreview = async (): Promise<void> => {
-    if (!selectedFile) {
-      message.error('Please select a file first!');
-      return;
+    private List<String> processExcelFile(MultipartFile file) throws Exception {
+        List<String> ids = new ArrayList<>();
+        try (Workbook workbook = new XSSFWorkbook(file.getInputStream())) {
+            Sheet sheet = workbook.getSheetAt(0);
+            boolean isFirstRow = true;
+            for (Row row : sheet) {
+                if (isFirstRow) {
+                    isFirstRow = false;
+                    continue;
+                }
+                Cell cell = row.getCell(0);
+                if (cell != null) {
+                    String id = getCellValueAsString(cell);
+                    if (!id.trim().isEmpty()) {
+                        ids.add(id.trim());
+                    }
+                }
+            }
+        }
+        return ids;
     }
 
-    try {
-      const isExcel = 
-        selectedFile.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || 
-        selectedFile.type === 'application/vnd.ms-excel';
-
-      if (isExcel) {
-        await processExcelFile(selectedFile);
-      } else {
-        await processCsvFile(selectedFile);
-      }
-
-      setPreviewVisible(true);
-    } catch (error) {
-      console.error('Error processing file:', error);
-      message.error('Error processing file');
+    private String getCellValueAsString(Cell cell) {
+        if (cell == null) {
+            return "";
+        }
+        switch (cell.getCellType()) {
+            case STRING:
+                return cell.getStringCellValue();
+            case NUMERIC:
+                // Handle numeric IDs by removing decimal points
+                return String.format("%.0f", cell.getNumericCellValue());
+            case BOOLEAN:
+                return String.valueOf(cell.getBooleanCellValue());
+            case FORMULA:
+                try {
+                    return String.valueOf(cell.getNumericCellValue());
+                } catch (Exception e) {
+                    return cell.getStringCellValue();
+                }
+            default:
+                return "";
+        }
     }
-  };
 
-  const handleUpload = async (): Promise<void> => {
-    if (!selectedFile) {
-      message.error('Please select a file first!');
-      return;
+    private int saveDataToDatabase(List<String> ids) {
+        LocalDateTime now = LocalDateTime.now();
+        List<IdStatus> entities = ids.stream()
+            .map(id -> {
+                IdStatus entity = new IdStatus();
+                entity.setId(id);
+                entity.setLastUpdatedTimestamp(now);
+                entity.setStatus("PENDING"); // Default status
+                return entity;
+            })
+            .toList();
+
+        idStatusRepository.saveAll(entities);
+        return entities.size();
+    }
+}
+
+// Entity
+package com.example.fileupload.entity;
+
+import jakarta.persistence.*;
+import lombok.Data;
+import java.time.LocalDateTime;
+
+@Entity
+@Table(name = "id_status")
+@Data
+public class IdStatus {
+    @Id
+    private String id;
+    
+    @Column(nullable = false)
+    private LocalDateTime lastUpdatedTimestamp;
+    
+    @Column(nullable = false)
+    private String status;
+}
+
+// Repository
+package com.example.fileupload.repository;
+
+import com.example.fileupload.entity.IdStatus;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface IdStatusRepository extends JpaRepository<IdStatus, String> {
+}
+
+// DTO
+package com.example.fileupload.dto;
+
+import lombok.AllArgsConstructor;
+import lombok.Data;
+
+@Data
+@AllArgsConstructor
+public class FileUploadResponse {
+    private String status;
+    private String message;
+}
+
+// Entity
+package com.example.fileupload.entity;
+
+import jakarta.persistence.*;
+import lombok.Data;
+import java.time.LocalDateTime;
+
+@Entity
+@Table(name = "ID_STATUS")
+@Data
+public class IdStatus {
+    @Id
+    @Column(name = "ID", length = 50)
+    private String id;
+    
+    @Column(name = "LAST_UPDATED_TIMESTAMP", nullable = false)
+    private LocalDateTime lastUpdatedTimestamp;
+    
+    @Column(name = "STATUS", length = 20, nullable = false)
+    private String status;
+}
+
+// Repository with Oracle-specific query
+package com.example.fileupload.repository;
+
+import com.example.fileupload.entity.IdStatus;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import java.util.List;
+
+public interface IdStatusRepository extends JpaRepository<IdStatus, String> {
+    @Query(value = "SELECT * FROM ID_STATUS WHERE ROWNUM <= :limit", nativeQuery = true)
+    List<IdStatus> findWithLimit(int limit);
+}
+
+// Batch Insert Service
+package com.example.fileupload.service;
+
+import com.example.fileupload.entity.IdStatus;
+import com.example.fileupload.repository.IdStatusRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.sql.Timestamp;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+
+@Service
+public class BatchInsertService {
+    
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+    
+    private static final int BATCH_SIZE = 1000;
+
+    @Transactional
+    public void batchInsert(List<String> ids) {
+        String sql = "INSERT INTO ID_STATUS (ID, LAST_UPDATED_TIMESTAMP, STATUS) VALUES (?, ?, ?)";
+        List<Object[]> batchArgs = new ArrayList<>();
+        LocalDateTime now = LocalDateTime.now();
+        
+        for (String id : ids) {
+            Object[] params = new Object[]{
+                id,
+                Timestamp.valueOf(now),
+                "PENDING"
+            };
+            batchArgs.add(params);
+            
+            if (batchArgs.size() >= BATCH_SIZE) {
+                jdbcTemplate.batchUpdate(sql, batchArgs);
+                batchArgs.clear();
+            }
+        }
+        
+        if (!batchArgs.isEmpty()) {
+            jdbcTemplate.batchUpdate(sql, batchArgs);
+        }
+    }
+}
+
+// Modified FileProcessingService
+package com.example.fileupload.service;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
+
+@Service
+public class FileProcessingService {
+
+    @Autowired
+    private BatchInsertService batchInsertService;
+
+    @Transactional
+    public int processAndSaveFile(MultipartFile file) throws Exception {
+        List<String> ids;
+        String fileName = file.getOriginalFilename();
+
+        if (fileName.endsWith(".csv")) {
+            ids = processCsvFile(file);
+        } else if (fileName.endsWith(".xlsx") || fileName.endsWith(".xls")) {
+            ids = processExcelFile(file);
+        } else {
+            throw new IllegalArgumentException("Unsupported file format");
+        }
+
+        // Use batch insert for better performance
+        batchInsertService.batchInsert(ids);
+        return ids.size();
     }
 
-    const formData = new FormData();
-    formData.append('file', selectedFile);
+    // ... rest of the methods remain the same ...
+}
+# Server Configuration
+server.port=8080
 
-    try {
-      const response = await fetch('YOUR_SPRING_BOOT_API_ENDPOINT', {
-        method: 'POST',
-        body: formData,
-      });
+# Oracle Database Configuration
+spring.datasource.url=jdbc:oracle:thin:@//localhost:1521/XEPDB1
+spring.datasource.username=your_username
+spring.datasource.password=your_password
+spring.datasource.driver-class-name=oracle.jdbc.OracleDriver
 
-      if (response.ok) {
-        message.success('File uploaded successfully!');
-        setSelectedFile(null);
-        setFileList([]);
-      } else {
-        message.error('Upload failed!');
-      }
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-      message.error('Error uploading file: ' + errorMessage);
-    }
-  };
+# JPA Configuration
+spring.jpa.database-platform=org.hibernate.dialect.OracleDialect
+spring.jpa.hibernate.ddl-auto=update
+spring.jpa.show-sql=true
+spring.jpa.properties.hibernate.format_sql=true
 
-  const draggerProps: UploadProps = {
-    name: 'file',
-    multiple: false,
-    fileList,
-    beforeUpload: handleFileSelect,
-    onRemove: () => {
-      setSelectedFile(null);
-      setFileList([]);
-    },
-    accept: '.csv,.xlsx,.xls'
-  };
+# File Upload Configuration
+spring.servlet.multipart.max-file-size=10MB
+spring.servlet.multipart.max-request-size=10MB
 
-  return (
-    <div className="p-6">
-      <Dragger {...draggerProps}>
-        <p className="ant-upload-drag-icon">
-          <InboxOutlined />
-        </p>
-        <p className="ant-upload-text">
-          Click or drag file to this area to upload
-        </p>
-        <p className="ant-upload-hint">
-          Support for CSV and Excel files only
-        </p>
-      </Dragger>
+# CORS Configuration
+spring.web.cors.allowed-origins=http://localhost:3000
+spring.web.cors.allowed-methods=GET,POST,PUT,DELETE,OPTIONS
+spring.web.cors.allowed-headers=*
 
-      <div className="mt-4 flex gap-4">
-        <Button 
-          type="primary" 
-          onClick={handlePreview}
-          disabled={!selectedFile}
-        >
-          Preview
-        </Button>
-        <Button 
-          type="primary" 
-          onClick={handleUpload}
-          disabled={!selectedFile}
-        >
-          Upload
-        </Button>
-      </div>
-
-      <Modal
-        title="File Preview"
-        open={previewVisible}
-        onCancel={() => setPreviewVisible(false)}
-        width={800}
-        footer={null}
-      >
-        <Table
-          columns={csvData.columns}
-          dataSource={csvData.data}
-          scroll={{ x: true, y: 400 }}
-          pagination={{
-            pageSize: 10,
-            total: csvData.data.length
-          }}
-        />
-      </Modal>
-    </div>
-  );
-};
-
-export default FileUploader;
