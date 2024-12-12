@@ -1,20 +1,20 @@
 const fs = require('fs');
 const readline = require('readline');
 
-class LogParser {
+class LogSeparator {
     /**
-     * Parse log file and segregate requests and responses
+     * Separate requests and responses from a large log file
      * @param {string} inputLogFile - Path to the input log file
-     * @returns {Promise<{requests: Map<string, Array>, responses: Map<string, Array>}>}
+     * @param {Object} options - Configuration options for output files
      */
-    static async parseLogFile(inputLogFile) {
-        // Maps to store requests and responses
-        const requests = new Map();
-        const responses = new Map();
+    static async separateLogFile(inputLogFile, options = {}) {
+        // Default output file names
+        const requestOutputFile = options.requestOutputFile || 'rest_call_requests.log';
+        const responseOutputFile = options.responseOutputFile || 'http_responses.log';
 
-        // Regex patterns to extract relevant information
-        const requestPattern = /^(.*?)\s*REST CALL Request:\s*(.+)$/;
-        const responsePattern = /^(.*?)\s*HTTP Response:\s*(.+)$/;
+        // Create write streams for requests and responses
+        const requestWriteStream = fs.createWriteStream(requestOutputFile);
+        const responseWriteStream = fs.createWriteStream(responseOutputFile);
 
         // Create readline interface
         const fileStream = fs.createReadStream(inputLogFile);
@@ -23,147 +23,142 @@ class LogParser {
             crlfDelay: Infinity
         });
 
+        // Counters for logging
+        let requestCount = 0;
+        let responseCount = 0;
+
         // Process each line
         for await (const line of rl) {
-            // Check for request lines
-            const requestMatch = line.match(requestPattern);
-            if (requestMatch) {
-                const timestamp = requestMatch[1].trim();
-                const requestData = requestMatch[2].trim();
-
-                try {
-                    // Parse request data as JSON
-                    const parsedRequest = JSON.parse(requestData);
-
-                    // Extract universal request ID and page number
-                    const universalRequestId = parsedRequest['universal-request-id'];
-                    const page = parsedRequest.page || 0;
-
-                    if (universalRequestId) {
-                        if (!requests.has(universalRequestId)) {
-                            requests.set(universalRequestId, []);
-                        }
-                        requests.get(universalRequestId).push({
-                            timestamp,
-                            page,
-                            data: parsedRequest
-                        });
-                    }
-                } catch (error) {
-                    console.warn(`Warning: Could not parse request JSON: ${requestData}`, error);
-                }
+            // Check for REST CALL Request lines
+            if (line.includes('REST CALL Request:')) {
+                requestWriteStream.write(line + '\n');
+                requestCount++;
             }
 
-            // Check for response lines
-            const responseMatch = line.match(responsePattern);
-            if (responseMatch) {
-                const timestamp = responseMatch[1].trim();
-                const responseData = responseMatch[2].trim();
-
-                try {
-                    // Parse response data as JSON
-                    const parsedResponse = JSON.parse(responseData);
-
-                    // Extract universal request ID and page number
-                    const universalRequestId = parsedResponse['universal-request-id'];
-                    const page = parsedResponse.page || 0;
-
-                    if (universalRequestId) {
-                        if (!responses.has(universalRequestId)) {
-                            responses.set(universalRequestId, []);
-                        }
-                        responses.get(universalRequestId).push({
-                            timestamp,
-                            page,
-                            data: parsedResponse
-                        });
-                    }
-                } catch (error) {
-                    console.warn(`Warning: Could not parse response JSON: ${responseData}`, error);
-                }
+            // Check for HTTP Response lines
+            if (line.includes('HTTP Response:')) {
+                responseWriteStream.write(line + '\n');
+                responseCount++;
             }
         }
 
-        return { requests, responses };
-    }
-
-    /**
-     * Write segregated logs to output files
-     * @param {Map<string, Array>} requests - Parsed requests
-     * @param {Map<string, Array>} responses - Parsed responses
-     * @param {Object} options - Configuration options
-     */
-    static writeSegregatedLogs(
-        requests, 
-        responses, 
-        options = {
-            requestOutputFile: 'rest_call_requests.log',
-            responseOutputFile: 'http_responses.log'
-        }
-    ) {
-        // Helper function to sort by page
-        const sortByPage = (items) => {
-            return items.sort((a, b) => (a.page || 0) - (b.page || 0));
-        };
-
-        // Write requests
-        const requestWriteStream = fs.createWriteStream(options.requestOutputFile);
-        for (const [reqId, reqList] of requests.entries()) {
-            const sortedRequests = sortByPage(reqList);
-            
-            sortedRequests.forEach(req => {
-                requestWriteStream.write(`Universal Request ID: ${reqId}\n`);
-                requestWriteStream.write(`Timestamp: ${req.timestamp}\n`);
-                requestWriteStream.write(`Page: ${req.page}\n`);
-                requestWriteStream.write(`Request Data: ${JSON.stringify(req.data, null, 2)}\n`);
-                requestWriteStream.write("\n---\n\n");
-            });
-        }
+        // Close write streams
         requestWriteStream.end();
-
-        // Write responses
-        const responseWriteStream = fs.createWriteStream(options.responseOutputFile);
-        for (const [respId, respList] of responses.entries()) {
-            const sortedResponses = sortByPage(respList);
-            
-            sortedResponses.forEach(resp => {
-                responseWriteStream.write(`Universal Request ID: ${respId}\n`);
-                responseWriteStream.write(`Timestamp: ${resp.timestamp}\n`);
-                responseWriteStream.write(`Page: ${resp.page}\n`);
-                responseWriteStream.write(`Response Data: ${JSON.stringify(resp.data, null, 2)}\n`);
-                responseWriteStream.write("\n---\n\n");
-            });
-        }
         responseWriteStream.end();
+
+        console.log(`Log separation completed.`);
+        console.log(`Requests found: ${requestCount}`);
+        console.log(`Responses found: ${responseCount}`);
     }
 
     /**
-     * Main method to parse and write log files
+     * Advanced separator with additional filtering capabilities
      * @param {string} inputLogFile - Path to the input log file
-     * @param {Object} options - Configuration options
+     * @param {Object} options - Advanced configuration options
      */
-    static async processLogFile(
-        inputLogFile, 
-        options = {
-            requestOutputFile: 'rest_call_requests.log',
-            responseOutputFile: 'http_responses.log'
-        }
-    ) {
-        try {
-            // Parse the log file
-            const { requests, responses } = await this.parseLogFile(inputLogFile);
+    static async advancedSeparate(inputLogFile, options = {}) {
+        const {
+            requestOutputFile = 'rest_call_requests.log',
+            responseOutputFile = 'http_responses.log',
+            requestFilter = () => true,
+            responseFilter = () => true,
+            universalRequestIdExtractor = null
+        } = options;
 
-            // Write segregated logs
-            this.writeSegregatedLogs(requests, responses, options);
+        const requestWriteStream = fs.createWriteStream(requestOutputFile);
+        const responseWriteStream = fs.createWriteStream(responseOutputFile);
 
-            console.log('Log file parsing completed successfully.');
-        } catch (error) {
-            console.error('Error processing log file:', error);
+        const fileStream = fs.createReadStream(inputLogFile);
+        const rl = readline.createInterface({
+            input: fileStream,
+            crlfDelay: Infinity
+        });
+
+        let requestCount = 0;
+        let responseCount = 0;
+
+        for await (const line of rl) {
+            // Request separation with additional filtering
+            if (line.includes('REST CALL Request:')) {
+                if (requestFilter(line)) {
+                    // Optional universal request ID tracking
+                    if (universalRequestIdExtractor) {
+                        const requestId = universalRequestIdExtractor(line);
+                        if (requestId) {
+                            requestWriteStream.write(`[Request ID: ${requestId}] ${line}\n`);
+                        }
+                    } else {
+                        requestWriteStream.write(line + '\n');
+                    }
+                    requestCount++;
+                }
+            }
+
+            // Response separation with additional filtering
+            if (line.includes('HTTP Response:')) {
+                if (responseFilter(line)) {
+                    // Optional universal request ID tracking
+                    if (universalRequestIdExtractor) {
+                        const responseId = universalRequestIdExtractor(line);
+                        if (responseId) {
+                            responseWriteStream.write(`[Response ID: ${responseId}] ${line}\n`);
+                        }
+                    } else {
+                        responseWriteStream.write(line + '\n');
+                    }
+                    responseCount++;
+                }
+            }
         }
+
+        requestWriteStream.end();
+        responseWriteStream.end();
+
+        console.log(`Advanced log separation completed.`);
+        console.log(`Requests found: ${requestCount}`);
+        console.log(`Responses found: ${responseCount}`);
     }
 }
 
-// Example usage
-// LogParser.processLogFile('input.log');
+module.exports = LogSeparator;
 
-module.exports = LogParser;
+const LogSeparator = require('./logSeparator');
+
+async function main() {
+    try {
+        // Simple separation
+        await LogSeparator.separateLogFile('large_input.log', {
+            requestOutputFile: 'requests.log',
+            responseOutputFile: 'responses.log'
+        });
+
+        // Advanced separation with custom filtering
+        await LogSeparator.advancedSeparate('large_input.log', {
+            requestOutputFile: 'filtered_requests.log',
+            responseOutputFile: 'filtered_responses.log',
+            
+            // Optional filter to only include specific requests
+            requestFilter: (line) => {
+                // Example: Only include requests with specific endpoint
+                return line.includes('/api/users');
+            },
+
+            // Optional filter to only include specific responses
+            responseFilter: (line) => {
+                // Example: Only include successful responses (status code 200)
+                return line.includes('HTTP/1.1 200');
+            },
+
+            // Optional extractor for universal request ID
+            universalRequestIdExtractor: (line) => {
+                // Example: Extract universal request ID 
+                const match = line.match(/universal-request-id[=:]\s*(\w+)/);
+                return match ? match[1] : null;
+            }
+        });
+    } catch (error) {
+        console.error('Error processing log file:', error);
+    }
+}
+
+main();
