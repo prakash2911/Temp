@@ -1,196 +1,169 @@
 const fs = require('fs');
-const csv = require('csv-parser');
-const createCsvWriter = require('csv-writer').createObjectCsvWriter;
+const readline = require('readline');
 
-class CSVComparator {
-    constructor(file1Path, file2Path, options = {}) {
-        this.file1Path = file1Path;
-        this.file2Path = file2Path;
-        this.options = {
-            delimiter: options.delimiter || '|', // Pipe separator
-            encoding: options.encoding || 'utf-8',
-            ignoreColumns: options.ignoreColumns || [],
-            emptyValuePlaceholders: options.emptyValuePlaceholders || ['', 'NA', 'N/A', 'null', '-']
-        };
-    }
+class LogParser {
+    /**
+     * Parse log file and segregate requests and responses
+     * @param {string} inputLogFile - Path to the input log file
+     * @returns {Promise<{requests: Map<string, Array>, responses: Map<string, Array>}>}
+     */
+    static async parseLogFile(inputLogFile) {
+        // Maps to store requests and responses
+        const requests = new Map();
+        const responses = new Map();
 
-    // Normalize numeric values without decimal precision
-    normalizeNumeric(value) {
-        // Handle empty or null-like values
-        if (this.isEmptyValue(value)) {
-            return '';
-        }
+        // Regex patterns to extract relevant information
+        const requestPattern = /^(.*?)\s*REST CALL Request:\s*(.+)$/;
+        const responsePattern = /^(.*?)\s*HTTP Response:\s*(.+)$/;
 
-        // Convert to string and clean
-        const strValue = String(value).trim()
-            .replace(/,/g, '')    // Remove commas
-            .replace(/\s/g, '')   // Remove spaces
-            .replace(/₹/g, '')    // Remove currency symbols
-            .replace(/\$/g, '');  // Remove dollar signs
+        // Create readline interface
+        const fileStream = fs.createReadStream(inputLogFile);
+        const rl = readline.createInterface({
+            input: fileStream,
+            crlfDelay: Infinity
+        });
 
-        try {
-            // Handle exponential and regular numeric notation
-            if (/^-?\d+(\.\d+)?([eE][-+]?\d+)?$/.test(strValue)) {
-                // Convert to integer or full number without decimal manipulation
-                return Number(strValue).toString();
-            }
-            
-            return value; // Return original if not a number
-        } catch (error) {
-            return value; // Return original on conversion error
-        }
-    }
+        // Process each line
+        for await (const line of rl) {
+            // Check for request lines
+            const requestMatch = line.match(requestPattern);
+            if (requestMatch) {
+                const timestamp = requestMatch[1].trim();
+                const requestData = requestMatch[2].trim();
 
-    // Check if value is considered empty
-    isEmptyValue(value) {
-        if (value === null || value === undefined) return true;
-        
-        const strValue = String(value).trim();
-        return this.options.emptyValuePlaceholders.includes(strValue);
-    }
+                try {
+                    // Parse request data as JSON
+                    const parsedRequest = JSON.parse(requestData);
 
-    // Read and normalize CSV with pipe delimiter
-    async readNormalizedCSV(filePath) {
-        return new Promise((resolve, reject) => {
-            const results = new Set();
-            const csvOptions = {
-                separator: this.options.delimiter,
-                headers: true // Use first row as headers
-            };
+                    // Extract universal request ID and page number
+                    const universalRequestId = parsedRequest['universal-request-id'];
+                    const page = parsedRequest.page || 0;
 
-            fs.createReadStream(filePath, { encoding: this.options.encoding })
-                .pipe(csv(csvOptions))
-                .on('data', (data) => {
-                    const normalizedRow = {};
-                    
-                    // Normalize each column
-                    Object.keys(data).forEach((key) => {
-                        const value = data[key];
-                        
-                        // Skip ignored columns
-                        if (this.options.ignoreColumns.includes(key)) {
-                            normalizedRow[key] = value;
-                            return;
+                    if (universalRequestId) {
+                        if (!requests.has(universalRequestId)) {
+                            requests.set(universalRequestId, []);
                         }
+                        requests.get(universalRequestId).push({
+                            timestamp,
+                            page,
+                            data: parsedRequest
+                        });
+                    }
+                } catch (error) {
+                    console.warn(`Warning: Could not parse request JSON: ${requestData}`, error);
+                }
+            }
 
-                        // Normalize numeric values
-                        normalizedRow[key] = this.normalizeNumeric(value);
-                    });
+            // Check for response lines
+            const responseMatch = line.match(responsePattern);
+            if (responseMatch) {
+                const timestamp = responseMatch[1].trim();
+                const responseData = responseMatch[2].trim();
 
-                    // Convert to string for set comparison
-                    results.add(JSON.stringify(normalizedRow));
-                })
-                .on('end', () => {
-                    resolve(results);
-                })
-                .on('error', (error) => {
-                    reject(error);
-                });
-        });
+                try {
+                    // Parse response data as JSON
+                    const parsedResponse = JSON.parse(responseData);
+
+                    // Extract universal request ID and page number
+                    const universalRequestId = parsedResponse['universal-request-id'];
+                    const page = parsedResponse.page || 0;
+
+                    if (universalRequestId) {
+                        if (!responses.has(universalRequestId)) {
+                            responses.set(universalRequestId, []);
+                        }
+                        responses.get(universalRequestId).push({
+                            timestamp,
+                            page,
+                            data: parsedResponse
+                        });
+                    }
+                } catch (error) {
+                    console.warn(`Warning: Could not parse response JSON: ${responseData}`, error);
+                }
+            }
+        }
+
+        return { requests, responses };
     }
 
-    // Compare CSV files
-    async compare() {
+    /**
+     * Write segregated logs to output files
+     * @param {Map<string, Array>} requests - Parsed requests
+     * @param {Map<string, Array>} responses - Parsed responses
+     * @param {Object} options - Configuration options
+     */
+    static writeSegregatedLogs(
+        requests, 
+        responses, 
+        options = {
+            requestOutputFile: 'rest_call_requests.log',
+            responseOutputFile: 'http_responses.log'
+        }
+    ) {
+        // Helper function to sort by page
+        const sortByPage = (items) => {
+            return items.sort((a, b) => (a.page || 0) - (b.page || 0));
+        };
+
+        // Write requests
+        const requestWriteStream = fs.createWriteStream(options.requestOutputFile);
+        for (const [reqId, reqList] of requests.entries()) {
+            const sortedRequests = sortByPage(reqList);
+            
+            sortedRequests.forEach(req => {
+                requestWriteStream.write(`Universal Request ID: ${reqId}\n`);
+                requestWriteStream.write(`Timestamp: ${req.timestamp}\n`);
+                requestWriteStream.write(`Page: ${req.page}\n`);
+                requestWriteStream.write(`Request Data: ${JSON.stringify(req.data, null, 2)}\n`);
+                requestWriteStream.write("\n---\n\n");
+            });
+        }
+        requestWriteStream.end();
+
+        // Write responses
+        const responseWriteStream = fs.createWriteStream(options.responseOutputFile);
+        for (const [respId, respList] of responses.entries()) {
+            const sortedResponses = sortByPage(respList);
+            
+            sortedResponses.forEach(resp => {
+                responseWriteStream.write(`Universal Request ID: ${respId}\n`);
+                responseWriteStream.write(`Timestamp: ${resp.timestamp}\n`);
+                responseWriteStream.write(`Page: ${resp.page}\n`);
+                responseWriteStream.write(`Response Data: ${JSON.stringify(resp.data, null, 2)}\n`);
+                responseWriteStream.write("\n---\n\n");
+            });
+        }
+        responseWriteStream.end();
+    }
+
+    /**
+     * Main method to parse and write log files
+     * @param {string} inputLogFile - Path to the input log file
+     * @param {Object} options - Configuration options
+     */
+    static async processLogFile(
+        inputLogFile, 
+        options = {
+            requestOutputFile: 'rest_call_requests.log',
+            responseOutputFile: 'http_responses.log'
+        }
+    ) {
         try {
-            // Read and normalize both files
-            const file1Rows = await this.readNormalizedCSV(this.file1Path);
-            const file2Rows = await this.readNormalizedCSV(this.file2Path);
+            // Parse the log file
+            const { requests, responses } = await this.parseLogFile(inputLogFile);
 
-            // Find differences
-            const onlyInFile1 = new Set(
-                [...file1Rows].filter(row => !file2Rows.has(row))
-            );
-            const onlyInFile2 = new Set(
-                [...file2Rows].filter(row => !file1Rows.has(row))
-            );
+            // Write segregated logs
+            this.writeSegregatedLogs(requests, responses, options);
 
-            // Prepare results
-            const results = {
-                totalRowsFile1: file1Rows.size,
-                totalRowsFile2: file2Rows.size,
-                uniqueInFile1: onlyInFile1.size,
-                uniqueInFile2: onlyInFile2.size,
-                rowsOnlyInFile1: [...onlyInFile1].map(row => JSON.parse(row)),
-                rowsOnlyInFile2: [...onlyInFile2].map(row => JSON.parse(row))
-            };
-
-            return results;
+            console.log('Log file parsing completed successfully.');
         } catch (error) {
-            console.error('Comparison error:', error);
-            throw error;
+            console.error('Error processing log file:', error);
         }
-    }
-
-    // Generate detailed comparison report
-    async generateDetailedReport(outputDir = './') {
-        const comparisonResults = await this.compare();
-
-        // Create output directory if not exists
-        if (!fs.existsSync(outputDir)){
-            fs.mkdirSync(outputDir, { recursive: true });
-        }
-
-        // Logging comparison details
-        const logStream = fs.createWriteStream(`${outputDir}/comparison_log.txt`, { flags: 'w' });
-        
-        logStream.write('Comparison Report\n');
-        logStream.write('=================\n\n');
-        logStream.write(`Total rows in File 1: ${comparisonResults.totalRowsFile1}\n`);
-        logStream.write(`Total rows in File 2: ${comparisonResults.totalRowsFile2}\n`);
-        logStream.write(`Unique rows in File 1: ${comparisonResults.uniqueInFile1}\n`);
-        logStream.write(`Unique rows in File 2: ${comparisonResults.uniqueInFile2}\n\n`);
-
-        // Write rows unique to File 1
-        const csvWriterFile1 = createCsvWriter({
-            path: `${outputDir}/unique_in_file1.csv`,
-            header: Object.keys(comparisonResults.rowsOnlyInFile1[0] || {}).map(id => ({ id, title: id }))
-        });
-        await csvWriterFile1.writeRecords(comparisonResults.rowsOnlyInFile1);
-
-        // Write rows unique to File 2
-        const csvWriterFile2 = createCsvWriter({
-            path: `${outputDir}/unique_in_file2.csv`,
-            header: Object.keys(comparisonResults.rowsOnlyInFile2[0] || {}).map(id => ({ id, title: id }))
-        });
-        await csvWriterFile2.writeRecords(comparisonResults.rowsOnlyInFile2);
-
-        logStream.write('Detailed comparison files have been generated.\n');
-        logStream.end();
-
-        console.log('Comparison report generated successfully.');
-        return comparisonResults;
     }
 }
 
 // Example usage
-async function runComparison() {
-    try {
-        const comparator = new CSVComparator(
-            './file1.csv',  // First file
-            './file2.csv',  // Second file
-            {
-                delimiter: '|',
-                ignoreColumns: ['timestamp'], // Columns to ignore in comparison
-                emptyValuePlaceholders: ['', 'NA', 'N/A', 'null', '-', '0']
-            }
-        );
+// LogParser.processLogFile('input.log');
 
-        // Generate detailed comparison report
-        const results = await comparator.generateDetailedReport('./output');
-        
-        // Optional: Log specific details
-        console.log('Unique rows in File 1:', results.uniqueInFile1);
-        console.log('Unique rows in File 2:', results.uniqueInFile2);
-    } catch (error) {
-        console.error('Comparison failed:', error);
-    }
-}
-
-// Export for use in other modules
-module.exports = {
-    CSVComparator,
-    runComparison
-};
-
-// Uncomment to run directly
-// runComparison();
+module.exports = LogParser;
