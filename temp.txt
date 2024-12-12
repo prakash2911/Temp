@@ -7,66 +7,75 @@ class CSVComparator {
         this.file1Path = file1Path;
         this.file2Path = file2Path;
         this.options = {
-            delimiter: options.delimiter || ',',
+            delimiter: options.delimiter || '|', // Pipe separator
             encoding: options.encoding || 'utf-8',
             ignoreColumns: options.ignoreColumns || [],
-            decimalPrecision: options.decimalPrecision || 10
+            emptyValuePlaceholders: options.emptyValuePlaceholders || ['', 'NA', 'N/A', 'null', '-']
         };
     }
 
-    // Normalize numeric values
+    // Normalize numeric values without decimal precision
     normalizeNumeric(value) {
-        // Remove spaces, commas, and handle different numeric formats
-        if (typeof value !== 'string') {
-            value = String(value);
+        // Handle empty or null-like values
+        if (this.isEmptyValue(value)) {
+            return '';
         }
 
-        // Trim and remove formatting
-        const cleanValue = value.trim()
+        // Convert to string and clean
+        const strValue = String(value).trim()
             .replace(/,/g, '')    // Remove commas
             .replace(/\s/g, '')   // Remove spaces
-            .replace(/₹/g, '')    // Remove currency symbols if any
+            .replace(/₹/g, '')    // Remove currency symbols
             .replace(/\$/g, '');  // Remove dollar signs
 
-        // Try to convert to number
         try {
-            // Handle scientific notation and large numbers
-            const numValue = Number(cleanValue);
-            
-            // Check if it's actually a number
-            if (!isNaN(numValue)) {
-                // Round to specified decimal precision to handle float imprecision
-                return Number(numValue.toFixed(this.options.decimalPrecision));
+            // Handle exponential and regular numeric notation
+            if (/^-?\d+(\.\d+)?([eE][-+]?\d+)?$/.test(strValue)) {
+                // Convert to integer or full number without decimal manipulation
+                return Number(strValue).toString();
             }
+            
+            return value; // Return original if not a number
         } catch (error) {
-            // If conversion fails, return original value
-            return value;
+            return value; // Return original on conversion error
         }
-
-        return value;
     }
 
-    // Read and normalize entire CSV
+    // Check if value is considered empty
+    isEmptyValue(value) {
+        if (value === null || value === undefined) return true;
+        
+        const strValue = String(value).trim();
+        return this.options.emptyValuePlaceholders.includes(strValue);
+    }
+
+    // Read and normalize CSV with pipe delimiter
     async readNormalizedCSV(filePath) {
         return new Promise((resolve, reject) => {
             const results = new Set();
+            const csvOptions = {
+                separator: this.options.delimiter,
+                headers: true // Use first row as headers
+            };
 
             fs.createReadStream(filePath, { encoding: this.options.encoding })
-                .pipe(csv({ separator: this.options.delimiter }))
+                .pipe(csv(csvOptions))
                 .on('data', (data) => {
-                    // Normalize each row
                     const normalizedRow = {};
                     
-                    for (const [key, value] of Object.entries(data)) {
+                    // Normalize each column
+                    Object.keys(data).forEach((key) => {
+                        const value = data[key];
+                        
                         // Skip ignored columns
                         if (this.options.ignoreColumns.includes(key)) {
                             normalizedRow[key] = value;
-                            continue;
+                            return;
                         }
 
-                        // Normalize the value
+                        // Normalize numeric values
                         normalizedRow[key] = this.normalizeNumeric(value);
-                    }
+                    });
 
                     // Convert to string for set comparison
                     results.add(JSON.stringify(normalizedRow));
@@ -112,9 +121,24 @@ class CSVComparator {
         }
     }
 
-    // Write differences to output files
-    async writeDifferencesToCSV(outputDir = './') {
+    // Generate detailed comparison report
+    async generateDetailedReport(outputDir = './') {
         const comparisonResults = await this.compare();
+
+        // Create output directory if not exists
+        if (!fs.existsSync(outputDir)){
+            fs.mkdirSync(outputDir, { recursive: true });
+        }
+
+        // Logging comparison details
+        const logStream = fs.createWriteStream(`${outputDir}/comparison_log.txt`, { flags: 'w' });
+        
+        logStream.write('Comparison Report\n');
+        logStream.write('=================\n\n');
+        logStream.write(`Total rows in File 1: ${comparisonResults.totalRowsFile1}\n`);
+        logStream.write(`Total rows in File 2: ${comparisonResults.totalRowsFile2}\n`);
+        logStream.write(`Unique rows in File 1: ${comparisonResults.uniqueInFile1}\n`);
+        logStream.write(`Unique rows in File 2: ${comparisonResults.uniqueInFile2}\n\n`);
 
         // Write rows unique to File 1
         const csvWriterFile1 = createCsvWriter({
@@ -130,13 +154,10 @@ class CSVComparator {
         });
         await csvWriterFile2.writeRecords(comparisonResults.rowsOnlyInFile2);
 
-        // Print summary
-        console.log('Comparison Summary:');
-        console.log(`Total rows in File 1: ${comparisonResults.totalRowsFile1}`);
-        console.log(`Total rows in File 2: ${comparisonResults.totalRowsFile2}`);
-        console.log(`Unique rows in File 1: ${comparisonResults.uniqueInFile1}`);
-        console.log(`Unique rows in File 2: ${comparisonResults.uniqueInFile2}`);
+        logStream.write('Detailed comparison files have been generated.\n');
+        logStream.end();
 
+        console.log('Comparison report generated successfully.');
         return comparisonResults;
     }
 }
@@ -145,17 +166,21 @@ class CSVComparator {
 async function runComparison() {
     try {
         const comparator = new CSVComparator(
-            './file1.csv', 
-            './file2.csv', 
+            './file1.csv',  // First file
+            './file2.csv',  // Second file
             {
-                delimiter: ',',
+                delimiter: '|',
                 ignoreColumns: ['timestamp'], // Columns to ignore in comparison
-                decimalPrecision: 2 // Round numeric values to 2 decimal places
+                emptyValuePlaceholders: ['', 'NA', 'N/A', 'null', '-', '0']
             }
         );
 
-        const results = await comparator.writeDifferencesToCSV('./output');
-        console.log('Comparison completed successfully');
+        // Generate detailed comparison report
+        const results = await comparator.generateDetailedReport('./output');
+        
+        // Optional: Log specific details
+        console.log('Unique rows in File 1:', results.uniqueInFile1);
+        console.log('Unique rows in File 2:', results.uniqueInFile2);
     } catch (error) {
         console.error('Comparison failed:', error);
     }
