@@ -1,13 +1,171 @@
-Subject: Best Wishes for Your New Role
+const fs = require('fs');
+const csv = require('csv-parser');
+const createCsvWriter = require('csv-writer').createObjectCsvWriter;
 
-Hi [Manager's Name],
+class CSVComparator {
+    constructor(file1Path, file2Path, options = {}) {
+        this.file1Path = file1Path;
+        this.file2Path = file2Path;
+        this.options = {
+            delimiter: options.delimiter || ',',
+            encoding: options.encoding || 'utf-8',
+            ignoreColumns: options.ignoreColumns || [],
+            decimalPrecision: options.decimalPrecision || 10
+        };
+    }
 
-I just wanted to take a moment to say thank you for all the guidance and support you've given me while working on [Project Name]. It’s been a great experience learning from you, and I truly appreciate everything you’ve done for the team.
+    // Normalize numeric values
+    normalizeNumeric(value) {
+        // Remove spaces, commas, and handle different numeric formats
+        if (typeof value !== 'string') {
+            value = String(value);
+        }
 
-Though I’ll miss working with you on this project, I’m excited to see all the great things you’ll achieve in your new role. Wishing you all the best as you take on this new opportunity!
+        // Trim and remove formatting
+        const cleanValue = value.trim()
+            .replace(/,/g, '')    // Remove commas
+            .replace(/\s/g, '')   // Remove spaces
+            .replace(/₹/g, '')    // Remove currency symbols if any
+            .replace(/\$/g, '');  // Remove dollar signs
 
-Let’s stay in touch!
+        // Try to convert to number
+        try {
+            // Handle scientific notation and large numbers
+            const numValue = Number(cleanValue);
+            
+            // Check if it's actually a number
+            if (!isNaN(numValue)) {
+                // Round to specified decimal precision to handle float imprecision
+                return Number(numValue.toFixed(this.options.decimalPrecision));
+            }
+        } catch (error) {
+            // If conversion fails, return original value
+            return value;
+        }
 
-Best regards,
-Prakash Murugan
+        return value;
+    }
 
+    // Read and normalize entire CSV
+    async readNormalizedCSV(filePath) {
+        return new Promise((resolve, reject) => {
+            const results = new Set();
+
+            fs.createReadStream(filePath, { encoding: this.options.encoding })
+                .pipe(csv({ separator: this.options.delimiter }))
+                .on('data', (data) => {
+                    // Normalize each row
+                    const normalizedRow = {};
+                    
+                    for (const [key, value] of Object.entries(data)) {
+                        // Skip ignored columns
+                        if (this.options.ignoreColumns.includes(key)) {
+                            normalizedRow[key] = value;
+                            continue;
+                        }
+
+                        // Normalize the value
+                        normalizedRow[key] = this.normalizeNumeric(value);
+                    }
+
+                    // Convert to string for set comparison
+                    results.add(JSON.stringify(normalizedRow));
+                })
+                .on('end', () => {
+                    resolve(results);
+                })
+                .on('error', (error) => {
+                    reject(error);
+                });
+        });
+    }
+
+    // Compare CSV files
+    async compare() {
+        try {
+            // Read and normalize both files
+            const file1Rows = await this.readNormalizedCSV(this.file1Path);
+            const file2Rows = await this.readNormalizedCSV(this.file2Path);
+
+            // Find differences
+            const onlyInFile1 = new Set(
+                [...file1Rows].filter(row => !file2Rows.has(row))
+            );
+            const onlyInFile2 = new Set(
+                [...file2Rows].filter(row => !file1Rows.has(row))
+            );
+
+            // Prepare results
+            const results = {
+                totalRowsFile1: file1Rows.size,
+                totalRowsFile2: file2Rows.size,
+                uniqueInFile1: onlyInFile1.size,
+                uniqueInFile2: onlyInFile2.size,
+                rowsOnlyInFile1: [...onlyInFile1].map(row => JSON.parse(row)),
+                rowsOnlyInFile2: [...onlyInFile2].map(row => JSON.parse(row))
+            };
+
+            return results;
+        } catch (error) {
+            console.error('Comparison error:', error);
+            throw error;
+        }
+    }
+
+    // Write differences to output files
+    async writeDifferencesToCSV(outputDir = './') {
+        const comparisonResults = await this.compare();
+
+        // Write rows unique to File 1
+        const csvWriterFile1 = createCsvWriter({
+            path: `${outputDir}/unique_in_file1.csv`,
+            header: Object.keys(comparisonResults.rowsOnlyInFile1[0] || {}).map(id => ({ id, title: id }))
+        });
+        await csvWriterFile1.writeRecords(comparisonResults.rowsOnlyInFile1);
+
+        // Write rows unique to File 2
+        const csvWriterFile2 = createCsvWriter({
+            path: `${outputDir}/unique_in_file2.csv`,
+            header: Object.keys(comparisonResults.rowsOnlyInFile2[0] || {}).map(id => ({ id, title: id }))
+        });
+        await csvWriterFile2.writeRecords(comparisonResults.rowsOnlyInFile2);
+
+        // Print summary
+        console.log('Comparison Summary:');
+        console.log(`Total rows in File 1: ${comparisonResults.totalRowsFile1}`);
+        console.log(`Total rows in File 2: ${comparisonResults.totalRowsFile2}`);
+        console.log(`Unique rows in File 1: ${comparisonResults.uniqueInFile1}`);
+        console.log(`Unique rows in File 2: ${comparisonResults.uniqueInFile2}`);
+
+        return comparisonResults;
+    }
+}
+
+// Example usage
+async function runComparison() {
+    try {
+        const comparator = new CSVComparator(
+            './file1.csv', 
+            './file2.csv', 
+            {
+                delimiter: ',',
+                ignoreColumns: ['timestamp'], // Columns to ignore in comparison
+                decimalPrecision: 2 // Round numeric values to 2 decimal places
+            }
+        );
+
+        const results = await comparator.writeDifferencesToCSV('./output');
+        console.log('Comparison completed successfully');
+    } catch (error) {
+        console.error('Comparison failed:', error);
+    }
+}
+
+// Export for use in other modules
+module.exports = {
+    CSVComparator,
+    runComparison
+};
+
+// Uncomment to run directly
+// runComparison();
