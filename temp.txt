@@ -1,28 +1,26 @@
 const fs = require('fs');
 const readline = require('readline');
 
-class HTTPResponseExtractor {
+class LogChunker {
     constructor(logFilePath) {
         this.logFilePath = logFilePath;
-        this.responses = [];
     }
 
     /**
-     * Extract HTTP responses from the log file
-     * @param {Object} options - Configuration options for extraction
-     * @param {string} [options.responseStartPattern=/HTTP\/\d\.\d \d{3}/] - Regex to detect response start
-     * @param {string} [options.responseEndPattern=null] - Optional regex to detect response end
-     * @returns {Promise<Array>} Extracted responses
+     * Extract and chunk lines containing HTTP response
+     * @param {Object} options - Chunking configuration
+     * @param {number} [options.chunkSize=1024] - Size of each chunk in bytes
+     * @param {number} [options.overlap=0] - Number of bytes to overlap between chunks
+     * @returns {Promise<Array>} Chunked response lines
      */
-    async extractResponses(options = {}) {
+    async extractAndChunkResponses(options = {}) {
         const {
-            responseStartPattern = /HTTP\/\d\.\d \d{3}/,
-            responseEndPattern = null
+            chunkSize = 1024,
+            overlap = 0,
+            responsePattern = /HTTP\/\d\.\d \d{3}/
         } = options;
 
-        this.responses = [];
-        let currentResponse = null;
-
+        const chunks = [];
         const fileStream = fs.createReadStream(this.logFilePath, { encoding: 'utf8' });
         const rl = readline.createInterface({
             input: fileStream,
@@ -31,52 +29,21 @@ class HTTPResponseExtractor {
 
         return new Promise((resolve, reject) => {
             rl.on('line', (line) => {
-                // Check if line starts a new response
-                if (responseStartPattern.test(line)) {
-                    // Save previous response if exists
-                    if (currentResponse) {
-                        this.responses.push(currentResponse);
-                    }
-
-                    // Start a new response
-                    currentResponse = {
-                        rawText: line,
-                        headers: {},
-                        body: '',
-                        metadata: {
-                            startTimestamp: new Date()
-                        }
-                    };
-                }
-                
-                // If tracking a response, continue building it
-                if (currentResponse) {
-                    currentResponse.rawText += '\n' + line;
-
-                    // Parse headers
-                    if (line.includes(': ')) {
-                        try {
-                            const [key, value] = line.trim().split(': ');
-                            currentResponse.headers[key] = value;
-                        } catch (err) {
-                            // Ignore parsing errors
-                        }
-                    }
-
-                    // Optional end of response detection
-                    if (responseEndPattern && responseEndPattern.test(line)) {
-                        this.responses.push(currentResponse);
-                        currentResponse = null;
+                // Check if line contains HTTP response
+                if (responsePattern.test(line)) {
+                    // Chunk the response line
+                    for (let i = 0; i < line.length; i += chunkSize - overlap) {
+                        chunks.push({
+                            text: line.slice(i, i + chunkSize),
+                            startIndex: i,
+                            endIndex: Math.min(i + chunkSize, line.length)
+                        });
                     }
                 }
             });
 
             rl.on('close', () => {
-                // Add last response if exists
-                if (currentResponse) {
-                    this.responses.push(currentResponse);
-                }
-                resolve(this.responses);
+                resolve(chunks);
             });
 
             rl.on('error', (err) => {
@@ -86,55 +53,12 @@ class HTTPResponseExtractor {
     }
 
     /**
-     * Chunk the extracted responses
-     * @param {Object} options - Chunking configuration
-     * @param {number} [options.chunkSize=1024] - Size of each chunk in bytes
-     * @param {number} [options.overlap=0] - Number of bytes to overlap between chunks
-     * @returns {Array} Chunked responses
+     * Write chunked responses to a file
+     * @param {Array} chunks - Chunked responses
+     * @param {string} outputPath - Path to save chunks
      */
-    chunkResponses(options = {}) {
-        const {
-            chunkSize = 1024,
-            overlap = 0
-        } = options;
-
-        if (this.responses.length === 0) {
-            throw new Error('No responses extracted. Run extractResponses() first.');
-        }
-
-        const chunkedResponses = [];
-
-        this.responses.forEach(response => {
-            const rawText = response.rawText;
-
-            // Create chunks with optional overlap
-            for (let i = 0; i < rawText.length; i += chunkSize - overlap) {
-                chunkedResponses.push({
-                    text: rawText.slice(i, i + chunkSize),
-                    startIndex: i,
-                    endIndex: Math.min(i + chunkSize, rawText.length),
-                    responseMetadata: response.metadata
-                });
-            }
-        });
-
-        return chunkedResponses;
-    }
-
-    /**
-     * Save extracted responses to a file
-     * @param {string} outputPath - Path to save extracted responses
-     * @param {string} [format='json'] - Output format (json or txt)
-     */
-    async saveResponses(outputPath, format = 'json') {
-        if (this.responses.length === 0) {
-            throw new Error('No responses to save. Run extractResponses() first.');
-        }
-
-        const content = format === 'json' 
-            ? JSON.stringify(this.responses, null, 2)
-            : this.responses.map(r => r.rawText).join('\n\n---RESPONSE SEPARATOR---\n\n');
-
+    async writeChunksToFile(chunks, outputPath) {
+        const content = chunks.map(chunk => chunk.text).join('\n');
         await fs.promises.writeFile(outputPath, content);
     }
 }
@@ -142,22 +66,17 @@ class HTTPResponseExtractor {
 // Example usage
 async function processLogFile() {
     try {
-        const extractor = new HTTPResponseExtractor('path/to/your/logfile.log');
+        const chunker = new LogChunker('path/to/your/logfile.log');
         
-        // Extract responses
-        await extractor.extractResponses({
-            responseStartPattern: /HTTP\/\d\.\d \d{3}/,
-            responseEndPattern: null
+        // Extract and chunk responses
+        const chunks = await chunker.extractAndChunkResponses({
+            chunkSize: 1024,  // 1KB chunks
+            overlap: 100,      // 100 bytes overlap
+            responsePattern: /HTTP\/\d\.\d \d{3}/  // Customize regex as needed
         });
 
-        // Chunk responses
-        const chunks = extractor.chunkResponses({
-            chunkSize: 1024,
-            overlap: 100
-        });
-
-        // Optionally save responses
-        await extractor.saveResponses('extracted_responses.json');
+        // Optionally write chunks to a file
+        await chunker.writeChunksToFile(chunks, 'response_chunks.txt');
 
         return chunks;
     } catch (error) {
@@ -166,6 +85,6 @@ async function processLogFile() {
 }
 
 module.exports = {
-    HTTPResponseExtractor,
+    LogChunker,
     processLogFile
 };
