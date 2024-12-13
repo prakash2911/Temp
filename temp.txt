@@ -1,164 +1,171 @@
 const fs = require('fs');
 const readline = require('readline');
 
-class LogSeparator {
-    /**
-     * Separate requests and responses from a large log file
-     * @param {string} inputLogFile - Path to the input log file
-     * @param {Object} options - Configuration options for output files
-     */
-    static async separateLogFile(inputLogFile, options = {}) {
-        // Default output file names
-        const requestOutputFile = options.requestOutputFile || 'rest_call_requests.log';
-        const responseOutputFile = options.responseOutputFile || 'http_responses.log';
-
-        // Create write streams for requests and responses
-        const requestWriteStream = fs.createWriteStream(requestOutputFile);
-        const responseWriteStream = fs.createWriteStream(responseOutputFile);
-
-        // Create readline interface
-        const fileStream = fs.createReadStream(inputLogFile);
-        const rl = readline.createInterface({
-            input: fileStream,
-            crlfDelay: Infinity
-        });
-
-        // Counters for logging
-        let requestCount = 0;
-        let responseCount = 0;
-
-        // Process each line
-        for await (const line of rl) {
-            // Check for REST CALL Request lines
-            if (line.includes('REST CALL Request:')) {
-                requestWriteStream.write(line + '\n');
-                requestCount++;
-            }
-
-            // Check for HTTP Response lines
-            if (line.includes('HTTP Response:')) {
-                responseWriteStream.write(line + '\n');
-                responseCount++;
-            }
-        }
-
-        // Close write streams
-        requestWriteStream.end();
-        responseWriteStream.end();
-
-        console.log(`Log separation completed.`);
-        console.log(`Requests found: ${requestCount}`);
-        console.log(`Responses found: ${responseCount}`);
+class HTTPResponseExtractor {
+    constructor(logFilePath) {
+        this.logFilePath = logFilePath;
+        this.responses = [];
     }
 
     /**
-     * Advanced separator with additional filtering capabilities
-     * @param {string} inputLogFile - Path to the input log file
-     * @param {Object} options - Advanced configuration options
+     * Extract HTTP responses from the log file
+     * @param {Object} options - Configuration options for extraction
+     * @param {string} [options.responseStartPattern=/HTTP\/\d\.\d \d{3}/] - Regex to detect response start
+     * @param {string} [options.responseEndPattern=null] - Optional regex to detect response end
+     * @returns {Promise<Array>} Extracted responses
      */
-    static async advancedSeparate(inputLogFile, options = {}) {
+    async extractResponses(options = {}) {
         const {
-            requestOutputFile = 'rest_call_requests.log',
-            responseOutputFile = 'http_responses.log',
-            requestFilter = () => true,
-            responseFilter = () => true,
-            universalRequestIdExtractor = null
+            responseStartPattern = /HTTP\/\d\.\d \d{3}/,
+            responseEndPattern = null
         } = options;
 
-        const requestWriteStream = fs.createWriteStream(requestOutputFile);
-        const responseWriteStream = fs.createWriteStream(responseOutputFile);
+        this.responses = [];
+        let currentResponse = null;
 
-        const fileStream = fs.createReadStream(inputLogFile);
+        const fileStream = fs.createReadStream(this.logFilePath, { encoding: 'utf8' });
         const rl = readline.createInterface({
             input: fileStream,
             crlfDelay: Infinity
         });
 
-        let requestCount = 0;
-        let responseCount = 0;
-
-        for await (const line of rl) {
-            // Request separation with additional filtering
-            if (line.includes('REST CALL Request:')) {
-                if (requestFilter(line)) {
-                    // Optional universal request ID tracking
-                    if (universalRequestIdExtractor) {
-                        const requestId = universalRequestIdExtractor(line);
-                        if (requestId) {
-                            requestWriteStream.write(`[Request ID: ${requestId}] ${line}\n`);
-                        }
-                    } else {
-                        requestWriteStream.write(line + '\n');
+        return new Promise((resolve, reject) => {
+            rl.on('line', (line) => {
+                // Check if line starts a new response
+                if (responseStartPattern.test(line)) {
+                    // Save previous response if exists
+                    if (currentResponse) {
+                        this.responses.push(currentResponse);
                     }
-                    requestCount++;
-                }
-            }
 
-            // Response separation with additional filtering
-            if (line.includes('HTTP Response:')) {
-                if (responseFilter(line)) {
-                    // Optional universal request ID tracking
-                    if (universalRequestIdExtractor) {
-                        const responseId = universalRequestIdExtractor(line);
-                        if (responseId) {
-                            responseWriteStream.write(`[Response ID: ${responseId}] ${line}\n`);
+                    // Start a new response
+                    currentResponse = {
+                        rawText: line,
+                        headers: {},
+                        body: '',
+                        metadata: {
+                            startTimestamp: new Date()
                         }
-                    } else {
-                        responseWriteStream.write(line + '\n');
-                    }
-                    responseCount++;
+                    };
                 }
-            }
+                
+                // If tracking a response, continue building it
+                if (currentResponse) {
+                    currentResponse.rawText += '\n' + line;
+
+                    // Parse headers
+                    if (line.includes(': ')) {
+                        try {
+                            const [key, value] = line.trim().split(': ');
+                            currentResponse.headers[key] = value;
+                        } catch (err) {
+                            // Ignore parsing errors
+                        }
+                    }
+
+                    // Optional end of response detection
+                    if (responseEndPattern && responseEndPattern.test(line)) {
+                        this.responses.push(currentResponse);
+                        currentResponse = null;
+                    }
+                }
+            });
+
+            rl.on('close', () => {
+                // Add last response if exists
+                if (currentResponse) {
+                    this.responses.push(currentResponse);
+                }
+                resolve(this.responses);
+            });
+
+            rl.on('error', (err) => {
+                reject(err);
+            });
+        });
+    }
+
+    /**
+     * Chunk the extracted responses
+     * @param {Object} options - Chunking configuration
+     * @param {number} [options.chunkSize=1024] - Size of each chunk in bytes
+     * @param {number} [options.overlap=0] - Number of bytes to overlap between chunks
+     * @returns {Array} Chunked responses
+     */
+    chunkResponses(options = {}) {
+        const {
+            chunkSize = 1024,
+            overlap = 0
+        } = options;
+
+        if (this.responses.length === 0) {
+            throw new Error('No responses extracted. Run extractResponses() first.');
         }
 
-        requestWriteStream.end();
-        responseWriteStream.end();
+        const chunkedResponses = [];
 
-        console.log(`Advanced log separation completed.`);
-        console.log(`Requests found: ${requestCount}`);
-        console.log(`Responses found: ${responseCount}`);
+        this.responses.forEach(response => {
+            const rawText = response.rawText;
+
+            // Create chunks with optional overlap
+            for (let i = 0; i < rawText.length; i += chunkSize - overlap) {
+                chunkedResponses.push({
+                    text: rawText.slice(i, i + chunkSize),
+                    startIndex: i,
+                    endIndex: Math.min(i + chunkSize, rawText.length),
+                    responseMetadata: response.metadata
+                });
+            }
+        });
+
+        return chunkedResponses;
+    }
+
+    /**
+     * Save extracted responses to a file
+     * @param {string} outputPath - Path to save extracted responses
+     * @param {string} [format='json'] - Output format (json or txt)
+     */
+    async saveResponses(outputPath, format = 'json') {
+        if (this.responses.length === 0) {
+            throw new Error('No responses to save. Run extractResponses() first.');
+        }
+
+        const content = format === 'json' 
+            ? JSON.stringify(this.responses, null, 2)
+            : this.responses.map(r => r.rawText).join('\n\n---RESPONSE SEPARATOR---\n\n');
+
+        await fs.promises.writeFile(outputPath, content);
     }
 }
 
-module.exports = LogSeparator;
-
-const LogSeparator = require('./logSeparator');
-
-async function main() {
+// Example usage
+async function processLogFile() {
     try {
-        // Simple separation
-        await LogSeparator.separateLogFile('large_input.log', {
-            requestOutputFile: 'requests.log',
-            responseOutputFile: 'responses.log'
+        const extractor = new HTTPResponseExtractor('path/to/your/logfile.log');
+        
+        // Extract responses
+        await extractor.extractResponses({
+            responseStartPattern: /HTTP\/\d\.\d \d{3}/,
+            responseEndPattern: null
         });
 
-        // Advanced separation with custom filtering
-        await LogSeparator.advancedSeparate('large_input.log', {
-            requestOutputFile: 'filtered_requests.log',
-            responseOutputFile: 'filtered_responses.log',
-            
-            // Optional filter to only include specific requests
-            requestFilter: (line) => {
-                // Example: Only include requests with specific endpoint
-                return line.includes('/api/users');
-            },
-
-            // Optional filter to only include specific responses
-            responseFilter: (line) => {
-                // Example: Only include successful responses (status code 200)
-                return line.includes('HTTP/1.1 200');
-            },
-
-            // Optional extractor for universal request ID
-            universalRequestIdExtractor: (line) => {
-                // Example: Extract universal request ID 
-                const match = line.match(/universal-request-id[=:]\s*(\w+)/);
-                return match ? match[1] : null;
-            }
+        // Chunk responses
+        const chunks = extractor.chunkResponses({
+            chunkSize: 1024,
+            overlap: 100
         });
+
+        // Optionally save responses
+        await extractor.saveResponses('extracted_responses.json');
+
+        return chunks;
     } catch (error) {
         console.error('Error processing log file:', error);
     }
 }
 
-main();
+module.exports = {
+    HTTPResponseExtractor,
+    processLogFile
+};
