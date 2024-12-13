@@ -161,3 +161,28 @@ class LogChunkSeparator {
 }
 
 module.exports = LogChunkSeparator;
+
+const LogChunkSeparator = require('./logChunkSeparator');
+const path = require('path');
+
+async function main() {
+    try {
+        // Separate log file into chunks
+        await LogChunkSeparator.separateByUniversalRequestId('large_input.log', {
+            outputDir: path.join(__dirname, 'log_chunks'),
+            // Custom request ID extraction if needed
+            requestIdPattern: /universal-request-id[=:]\s*(\w+)/,
+            maxBufferSize: 1024 * 1024 * 10 // 10 MB per chunk
+        });
+
+        // Optional: Merge chunks back (if needed)
+        LogChunkSeparator.mergeChunks(path.join(__dirname, 'log_chunks'), {
+            outputFile: 'merged_log.log',
+            sortChunks: true
+        });
+    } catch (error) {
+        console.error('Error processing log file:', error);
+    }
+}
+
+main();
