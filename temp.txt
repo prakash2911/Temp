@@ -162,6 +162,7 @@ class LogChunkSeparator {
 
 module.exports = LogChunkSeparator;
 
+
 const LogChunkSeparator = require('./logChunkSeparator');
 const path = require('path');
 
