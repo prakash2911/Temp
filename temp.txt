@@ -2,28 +2,25 @@ const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 
-class LogChunkSeparator {
+class LogChunker {
     /**
-     * Separate log file into chunks based on universal request ID
+     * Separate large log file into fixed-size chunks
      * @param {string} inputLogFile - Path to the input log file
-     * @param {Object} options - Configuration options
+     * @param {Object} options - Chunking configuration
      */
-    static async separateByUniversalRequestId(inputLogFile, options = {}) {
-        // Configuration
+    static async chunkLogFile(inputLogFile, options = {}) {
+        // Configuration with sensible defaults
         const {
             outputDir = 'log_chunks',
-            requestIdPattern = /universal-request-id[=:]\s*(\w+)/,
-            maxBufferSize = 1024 * 1024 * 10 // 10 MB per chunk file
+            chunkSizeLines = 100000,  // Number of lines per chunk
+            chunkSizeBytes = 1024 * 1024 * 50, // 50 MB per chunk
+            prefix = 'chunk_'
         } = options;
 
         // Ensure output directory exists
         if (!fs.existsSync(outputDir)) {
             fs.mkdirSync(outputDir, { recursive: true });
         }
-
-        // Tracking for chunks and file streams
-        const requestChunks = new Map();
-        const responseChunks = new Map();
 
         // Create readline interface
         const fileStream = fs.createReadStream(inputLogFile);
@@ -32,76 +29,61 @@ class LogChunkSeparator {
             crlfDelay: Infinity
         });
 
-        // Process each line
-        let currentRequestId = null;
+        // Chunk tracking variables
+        let currentChunk = 1;
+        let currentChunkLines = 0;
         let currentChunkBuffer = '';
-        let currentChunkSize = 0;
-        let chunkCounter = 0;
+        let currentChunkBytes = 0;
 
-        const writeChunkToFile = (requestId, isResponse = false) => {
-            if (!currentRequestId || currentChunkBuffer.trim() === '') return;
-
-            // Determine chunk type and create appropriate filename
-            const chunkType = isResponse ? 'response' : 'request';
-            const safeRequestId = currentRequestId.replace(/[^a-zA-Z0-9-_]/g, '_');
-            const filename = `${safeRequestId}_${chunkType}_${chunkCounter++}.log`;
-            const filePath = path.join(outputDir, filename);
-
-            // Write chunk to file
-            fs.writeFileSync(filePath, currentChunkBuffer);
-
-            // Reset buffer
-            currentChunkBuffer = '';
-            currentChunkSize = 0;
+        // Create write stream for current chunk
+        const createChunkWriteStream = () => {
+            const chunkFileName = `${prefix}${currentChunk.toString().padStart(4, '0')}.log`;
+            const chunkPath = path.join(outputDir, chunkFileName);
+            return fs.createWriteStream(chunkPath);
         };
 
+        let chunkWriteStream = createChunkWriteStream();
+
+        // Process each line
         for await (const line of rl) {
-            // Extract universal request ID
-            const requestIdMatch = line.match(requestIdPattern);
-            
-            if (requestIdMatch) {
-                // New request ID detected
-                const newRequestId = requestIdMatch[1];
+            // Check if current chunk needs to be rotated
+            if (
+                currentChunkLines >= chunkSizeLines || 
+                currentChunkBytes >= chunkSizeBytes
+            ) {
+                // Close current chunk stream
+                chunkWriteStream.end();
 
-                // If we have a previous chunk, write it out
-                if (currentRequestId && currentChunkBuffer) {
-                    writeChunkToFile(currentRequestId, line.includes('HTTP Response:'));
-                }
-
-                // Reset for new chunk
-                currentRequestId = newRequestId;
-                currentChunkBuffer = line + '\n';
-                currentChunkSize = line.length;
-            } else {
-                // Accumulate lines for current chunk
-                if (currentRequestId) {
-                    // Check if adding this line would exceed max buffer size
-                    if (currentChunkSize + line.length > maxBufferSize) {
-                        // Write current chunk and start a new one
-                        writeChunkToFile(currentRequestId, line.includes('HTTP Response:'));
-                        currentChunkBuffer = line + '\n';
-                        currentChunkSize = line.length;
-                    } else {
-                        // Append to current chunk
-                        currentChunkBuffer += line + '\n';
-                        currentChunkSize += line.length;
-                    }
-                }
+                // Start new chunk
+                currentChunk++;
+                currentChunkLines = 0;
+                currentChunkBytes = 0;
+                chunkWriteStream = createChunkWriteStream();
             }
+
+            // Write line to current chunk
+            chunkWriteStream.write(line + '\n');
+            
+            // Update chunk tracking
+            currentChunkLines++;
+            currentChunkBytes += Buffer.byteLength(line, 'utf8');
         }
 
-        // Write final chunk if exists
-        if (currentRequestId && currentChunkBuffer) {
-            writeChunkToFile(currentRequestId, false);
-        }
+        // Close final chunk stream
+        chunkWriteStream.end();
 
-        console.log(`Log chunking completed.`);
-        console.log(`Chunks created in directory: ${outputDir}`);
-        console.log(`Total chunks: ${chunkCounter}`);
+        console.log(`Log file chunking completed.`);
+        console.log(`Total chunks created: ${currentChunk}`);
+        console.log(`Chunks stored in: ${outputDir}`);
+
+        return {
+            totalChunks: currentChunk,
+            chunkDirectory: outputDir
+        };
     }
 
     /**
-     * Merge chunks back into a single file if needed
+     * Merge chunks back into a single file
      * @param {string} chunkDirectory - Directory containing chunk files
      * @param {Object} options - Merge configuration
      */
@@ -122,26 +104,13 @@ class LogChunkSeparator {
         // Optional sorting of chunks
         if (sortChunks) {
             chunkFiles.sort((a, b) => {
-                // Extract request ID and chunk number
-                const parseFileName = (filename) => {
-                    const match = filename.match(/^(.+)_(request|response)_(\d+)\.log$/);
-                    return match ? {
-                        requestId: match[1],
-                        type: match[2],
-                        chunkNumber: parseInt(match[3])
-                    } : null;
+                // Extract chunk number and sort
+                const getChunkNumber = (filename) => {
+                    const match = filename.match(/chunk_(\d+)\.log/);
+                    return match ? parseInt(match[1]) : 0;
                 };
 
-                const parseA = parseFileName(a.filename);
-                const parseB = parseFileName(b.filename);
-
-                if (!parseA || !parseB) return 0;
-
-                // First sort by request ID, then by chunk number
-                if (parseA.requestId !== parseB.requestId) {
-                    return parseA.requestId.localeCompare(parseB.requestId);
-                }
-                return parseA.chunkNumber - parseB.chunkNumber;
+                return getChunkNumber(a.filename) - getChunkNumber(b.filename);
             });
         }
 
@@ -157,30 +126,39 @@ class LogChunkSeparator {
 
         console.log(`Chunks merged into: ${outputFile}`);
         console.log(`Total chunks merged: ${chunkFiles.length}`);
+
+        return {
+            outputFile,
+            totalChunksMerged: chunkFiles.length
+        };
     }
 }
 
-module.exports = LogChunkSeparator;
+module.exports = LogChunker;
 
 
-const LogChunkSeparator = require('./logChunkSeparator');
+
+const LogChunker = require('./logChunker');
 const path = require('path');
 
 async function main() {
     try {
-        // Separate log file into chunks
-        await LogChunkSeparator.separateByUniversalRequestId('large_input.log', {
+        // Chunk a large log file
+        const chunkResult = await LogChunker.chunkLogFile('very_large_input.log', {
             outputDir: path.join(__dirname, 'log_chunks'),
-            // Custom request ID extraction if needed
-            requestIdPattern: /universal-request-id[=:]\s*(\w+)/,
-            maxBufferSize: 1024 * 1024 * 10 // 10 MB per chunk
+            chunkSizeLines: 100000,    // 100,000 lines per chunk
+            chunkSizeBytes: 1024 * 1024 * 50, // 50 MB per chunk
+            prefix: 'log_'  // Custom prefix for chunk files
         });
 
         // Optional: Merge chunks back (if needed)
-        LogChunkSeparator.mergeChunks(path.join(__dirname, 'log_chunks'), {
-            outputFile: 'merged_log.log',
-            sortChunks: true
-        });
+        const mergeResult = LogChunker.mergeChunks(
+            path.join(__dirname, 'log_chunks'), 
+            {
+                outputFile: 'merged_log.log',
+                sortChunks: true
+            }
+        );
     } catch (error) {
         console.error('Error processing log file:', error);
     }
