@@ -1,167 +1,58 @@
-const fs = require('fs');
-const path = require('path');
-const readline = require('readline');
+deployment.yaml
 
-class LogChunker {
-    /**
-     * Separate large log file into fixed-size chunks
-     * @param {string} inputLogFile - Path to the input log file
-     * @param {Object} options - Chunking configuration
-     */
-    static async chunkLogFile(inputLogFile, options = {}) {
-        // Configuration with sensible defaults
-        const {
-            outputDir = 'log_chunks',
-            chunkSizeLines = 100000,  // Number of lines per chunk
-            chunkSizeBytes = 1024 * 1024 * 50, // 50 MB per chunk
-            prefix = 'chunk_'
-        } = options;
-
-        // Ensure output directory exists
-        if (!fs.existsSync(outputDir)) {
-            fs.mkdirSync(outputDir, { recursive: true });
-        }
-
-        // Create readline interface
-        const fileStream = fs.createReadStream(inputLogFile);
-        const rl = readline.createInterface({
-            input: fileStream,
-            crlfDelay: Infinity
-        });
-
-        // Chunk tracking variables
-        let currentChunk = 1;
-        let currentChunkLines = 0;
-        let currentChunkBuffer = '';
-        let currentChunkBytes = 0;
-
-        // Create write stream for current chunk
-        const createChunkWriteStream = () => {
-            const chunkFileName = `${prefix}${currentChunk.toString().padStart(4, '0')}.log`;
-            const chunkPath = path.join(outputDir, chunkFileName);
-            return fs.createWriteStream(chunkPath);
-        };
-
-        let chunkWriteStream = createChunkWriteStream();
-
-        // Process each line
-        for await (const line of rl) {
-            // Check if current chunk needs to be rotated
-            if (
-                currentChunkLines >= chunkSizeLines || 
-                currentChunkBytes >= chunkSizeBytes
-            ) {
-                // Close current chunk stream
-                chunkWriteStream.end();
-
-                // Start new chunk
-                currentChunk++;
-                currentChunkLines = 0;
-                currentChunkBytes = 0;
-                chunkWriteStream = createChunkWriteStream();
-            }
-
-            // Write line to current chunk
-            chunkWriteStream.write(line + '\n');
-            
-            // Update chunk tracking
-            currentChunkLines++;
-            currentChunkBytes += Buffer.byteLength(line, 'utf8');
-        }
-
-        // Close final chunk stream
-        chunkWriteStream.end();
-
-        console.log(`Log file chunking completed.`);
-        console.log(`Total chunks created: ${currentChunk}`);
-        console.log(`Chunks stored in: ${outputDir}`);
-
-        return {
-            totalChunks: currentChunk,
-            chunkDirectory: outputDir
-        };
-    }
-
-    /**
-     * Merge chunks back into a single file
-     * @param {string} chunkDirectory - Directory containing chunk files
-     * @param {Object} options - Merge configuration
-     */
-    static mergeChunks(chunkDirectory, options = {}) {
-        const {
-            outputFile = 'merged_log.log',
-            sortChunks = true
-        } = options;
-
-        // Read all chunk files
-        const chunkFiles = fs.readdirSync(chunkDirectory)
-            .filter(file => file.endsWith('.log'))
-            .map(file => ({
-                filename: file,
-                fullPath: path.join(chunkDirectory, file)
-            }));
-
-        // Optional sorting of chunks
-        if (sortChunks) {
-            chunkFiles.sort((a, b) => {
-                // Extract chunk number and sort
-                const getChunkNumber = (filename) => {
-                    const match = filename.match(/chunk_(\d+)\.log/);
-                    return match ? parseInt(match[1]) : 0;
-                };
-
-                return getChunkNumber(a.filename) - getChunkNumber(b.filename);
-            });
-        }
-
-        // Merge chunks
-        const outputStream = fs.createWriteStream(outputFile);
-
-        chunkFiles.forEach(chunk => {
-            const chunkContent = fs.readFileSync(chunk.fullPath, 'utf-8');
-            outputStream.write(chunkContent);
-        });
-
-        outputStream.end();
-
-        console.log(`Chunks merged into: ${outputFile}`);
-        console.log(`Total chunks merged: ${chunkFiles.length}`);
-
-        return {
-            outputFile,
-            totalChunksMerged: chunkFiles.length
-        };
-    }
-}
-
-module.exports = LogChunker;
+apiVersion: apps.openshift.io/v1
+kind: DeploymentConfig
+metadata:
+  name: frontend
+spec:
+  replicas: 1
+  selector:
+    app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: image-registry.openshift-image-registry.svc:5000/your-project/frontend:latest
+          ports:
+            - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-service
+spec:
+  selector:
+    app: frontend
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: frontend-route
+spec:
+  to:
+    kind: Service
+    name: frontend-service
+  port:
+    targetPort: 80
 
 
+\\Docker
 
-const LogChunker = require('./logChunker');
-const path = require('path');
+FROM node:18 as build
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm install
+COPY . .
+RUN npm run build
 
-async function main() {
-    try {
-        // Chunk a large log file
-        const chunkResult = await LogChunker.chunkLogFile('very_large_input.log', {
-            outputDir: path.join(__dirname, 'log_chunks'),
-            chunkSizeLines: 100000,    // 100,000 lines per chunk
-            chunkSizeBytes: 1024 * 1024 * 50, // 50 MB per chunk
-            prefix: 'log_'  // Custom prefix for chunk files
-        });
-
-        // Optional: Merge chunks back (if needed)
-        const mergeResult = LogChunker.mergeChunks(
-            path.join(__dirname, 'log_chunks'), 
-            {
-                outputFile: 'merged_log.log',
-                sortChunks: true
-            }
-        );
-    } catch (error) {
-        console.error('Error processing log file:', error);
-    }
-}
-
-main();
+FROM nginx:alpine
+COPY --from=build /app/build /usr/share/nginx/html
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
