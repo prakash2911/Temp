@@ -8,7 +8,7 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/trades")
-@CrossOrigin(origins = "*")
+@CrossOrigin(origins = "*") // Allow frontend requests
 public class TradeController {
 
     @Autowired
@@ -19,20 +19,14 @@ public class TradeController {
         @RequestParam String serviceName, 
         @RequestParam List<String> sourceIds,
         @RequestParam int page,
-        @RequestParam int size,
-        @RequestParam(required = false) String sortField,
-        @RequestParam(required = false) String sortOrder
+        @RequestParam int size
     ) {
-        int offset = page * size;
-        String orderBy = "";
+        int offset = page * size; // Calculate pagination offset
 
-        if (sortField != null && sortOrder != null) {
-            orderBy = " ORDER BY " + sortField + " " + ("descend".equals(sortOrder) ? "DESC" : "ASC");
-        }
-
+        // Fetch data
         String sql = "SELECT * FROM tradeview WHERE servicename = ? AND source_id IN (" +
-                     String.join(",", Collections.nCopies(sourceIds.size(), "?")) + ")" +
-                     orderBy + " LIMIT ? OFFSET ?";
+                     String.join(",", Collections.nCopies(sourceIds.size(), "?")) +
+                     ") LIMIT ? OFFSET ?";
 
         List<Object> params = new ArrayList<>();
         params.add(serviceName);
@@ -42,6 +36,7 @@ public class TradeController {
 
         List<Map<String, Object>> result = jdbcTemplate.queryForList(sql, params.toArray());
 
+        // Generate dynamic headers
         List<Map<String, String>> headers = new ArrayList<>();
         if (!result.isEmpty()) {
             for (String key : result.get(0).keySet()) {
@@ -51,10 +46,12 @@ public class TradeController {
             }
         }
 
+        // Count total records for pagination
         String countSql = "SELECT COUNT(*) FROM tradeview WHERE servicename = ? AND source_id IN (" +
                           String.join(",", Collections.nCopies(sourceIds.size(), "?")) + ")";
         int total = jdbcTemplate.queryForObject(countSql, Integer.class, params.subList(0, params.size() - 2).toArray());
 
+        // Build response
         Map<String, Object> response = new HashMap<>();
         response.put("header", headers);
         response.put("data", result);
@@ -65,9 +62,7 @@ public class TradeController {
         return response;
     }
 }
-
-
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { Table, Select, Input, Button } from "antd";
 import { useQuery } from "react-query";
 import axios from "axios";
@@ -75,11 +70,11 @@ import axios from "axios";
 const { Option } = Select;
 
 const fetchTrades = async ({ queryKey }) => {
-  const [, serviceName, sourceIds, page, size, sortField, sortOrder] = queryKey;
+  const [, serviceName, sourceIds, page, size] = queryKey;
   if (!serviceName || sourceIds.length === 0) return { header: [], data: [], total: 0 };
 
   const { data } = await axios.get("http://localhost:8080/api/trades", {
-    params: { serviceName, sourceIds, page, size, sortField, sortOrder },
+    params: { serviceName, sourceIds, page, size },
   });
   return data;
 };
@@ -88,25 +83,61 @@ const TradeTable = () => {
   const [serviceName, setServiceName] = useState(null);
   const [sourceIds, setSourceIds] = useState([]);
   const [page, setPage] = useState(0);
-  const [sortField, setSortField] = useState(null);
-  const [sortOrder, setSortOrder] = useState(null);
   const pageSize = 10;
+  const [searchText, setSearchText] = useState("");
+  const [sortColumn, setSortColumn] = useState(null);
+  const [sortOrder, setSortOrder] = useState(null);
 
   const { data, isLoading } = useQuery(
-    ["trades", serviceName, sourceIds, page, pageSize, sortField, sortOrder],
+    ["trades", serviceName, sourceIds, page, pageSize],
     fetchTrades,
     { enabled: !!serviceName && sourceIds.length > 0 }
   );
 
+  // Handle sorting logic
+  const sortedData = useMemo(() => {
+    if (!sortColumn || !data?.data) return data?.data || [];
+
+    return [...data.data].sort((a, b) => {
+      const aValue = a[sortColumn];
+      const bValue = b[sortColumn];
+
+      if (typeof aValue === "number" && typeof bValue === "number") {
+        return sortOrder === "ascend" ? aValue - bValue : bValue - aValue;
+      }
+
+      return sortOrder === "ascend"
+        ? String(aValue).localeCompare(String(bValue))
+        : String(bValue).localeCompare(String(aValue));
+    });
+  }, [data?.data, sortColumn, sortOrder]);
+
+  // Handle search filter logic
+  const filteredData = useMemo(() => {
+    if (!searchText) return sortedData;
+
+    return sortedData.filter((row) =>
+      Object.values(row).some((value) =>
+        String(value).toLowerCase().includes(searchText.toLowerCase())
+      )
+    );
+  }, [sortedData, searchText]);
+
+  // Generate table columns dynamically with sorting
   const columns = data?.header.map((header) => ({
     title: header.columnName.toUpperCase(),
     dataIndex: header.columnName,
     key: header.columnName,
-    sorter: true, // Enable sorting
+    sorter: true,
+    sortOrder: sortColumn === header.columnName ? sortOrder : null,
     onHeaderCell: () => ({
       onClick: () => {
-        setSortField(header.columnName);
-        setSortOrder(sortOrder === "ascend" ? "descend" : "ascend");
+        if (sortColumn === header.columnName) {
+          setSortOrder(sortOrder === "ascend" ? "descend" : "ascend");
+        } else {
+          setSortColumn(header.columnName);
+          setSortOrder("ascend");
+        }
       },
     }),
   }));
@@ -132,9 +163,15 @@ const TradeTable = () => {
         Search
       </Button>
 
+      <Input
+        placeholder="Search in table..."
+        style={{ width: 300, marginLeft: 10, marginBottom: 10 }}
+        onChange={(e) => setSearchText(e.target.value)}
+      />
+
       <Table
         columns={columns}
-        dataSource={data?.data}
+        dataSource={filteredData}
         loading={isLoading}
         rowKey="id"
         pagination={{
@@ -142,10 +179,6 @@ const TradeTable = () => {
           pageSize,
           total: data?.total,
           onChange: (p) => setPage(p - 1),
-        }}
-        onChange={(pagination, filters, sorter) => {
-          setSortField(sorter.field);
-          setSortOrder(sorter.order);
         }}
         style={{ marginTop: 20 }}
       />
