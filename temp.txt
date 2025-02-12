@@ -1,58 +1,156 @@
-deployment.yaml
+package com.example.demo.controller;
 
-apiVersion: apps.openshift.io/v1
-kind: DeploymentConfig
-metadata:
-  name: frontend
-spec:
-  replicas: 1
-  selector:
-    app: frontend
-  template:
-    metadata:
-      labels:
-        app: frontend
-    spec:
-      containers:
-        - name: frontend
-          image: image-registry.openshift-image-registry.svc:5000/your-project/frontend:latest
-          ports:
-            - containerPort: 80
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: frontend-service
-spec:
-  selector:
-    app: frontend
-  ports:
-    - protocol: TCP
-      port: 80
-      targetPort: 80
----
-apiVersion: route.openshift.io/v1
-kind: Route
-metadata:
-  name: frontend-route
-spec:
-  to:
-    kind: Service
-    name: frontend-service
-  port:
-    targetPort: 80
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.*;
+
+@RestController
+@RequestMapping("/api/trades")
+@CrossOrigin(origins = "*")
+public class TradeController {
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    @GetMapping
+    public Map<String, Object> getTrades(
+        @RequestParam String serviceName, 
+        @RequestParam List<String> sourceIds,
+        @RequestParam int page,
+        @RequestParam int size,
+        @RequestParam(required = false) String sortField,
+        @RequestParam(required = false) String sortOrder
+    ) {
+        int offset = page * size;
+        String orderBy = "";
+
+        if (sortField != null && sortOrder != null) {
+            orderBy = " ORDER BY " + sortField + " " + ("descend".equals(sortOrder) ? "DESC" : "ASC");
+        }
+
+        String sql = "SELECT * FROM tradeview WHERE servicename = ? AND source_id IN (" +
+                     String.join(",", Collections.nCopies(sourceIds.size(), "?")) + ")" +
+                     orderBy + " LIMIT ? OFFSET ?";
+
+        List<Object> params = new ArrayList<>();
+        params.add(serviceName);
+        params.addAll(sourceIds);
+        params.add(size);
+        params.add(offset);
+
+        List<Map<String, Object>> result = jdbcTemplate.queryForList(sql, params.toArray());
+
+        List<Map<String, String>> headers = new ArrayList<>();
+        if (!result.isEmpty()) {
+            for (String key : result.get(0).keySet()) {
+                Map<String, String> header = new HashMap<>();
+                header.put("columnName", key);
+                headers.add(header);
+            }
+        }
+
+        String countSql = "SELECT COUNT(*) FROM tradeview WHERE servicename = ? AND source_id IN (" +
+                          String.join(",", Collections.nCopies(sourceIds.size(), "?")) + ")";
+        int total = jdbcTemplate.queryForObject(countSql, Integer.class, params.subList(0, params.size() - 2).toArray());
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("header", headers);
+        response.put("data", result);
+        response.put("total", total);
+        response.put("page", page);
+        response.put("size", size);
+
+        return response;
+    }
+}
 
 
-\\Docker
+import React, { useState } from "react";
+import { Table, Select, Input, Button } from "antd";
+import { useQuery } from "react-query";
+import axios from "axios";
 
-FROM node:18 as build
-WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm install
-COPY . .
-RUN npm run build
+const { Option } = Select;
 
-FROM nginx:alpine
-COPY --from=build /app/build /usr/share/nginx/html
-EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
+const fetchTrades = async ({ queryKey }) => {
+  const [, serviceName, sourceIds, page, size, sortField, sortOrder] = queryKey;
+  if (!serviceName || sourceIds.length === 0) return { header: [], data: [], total: 0 };
+
+  const { data } = await axios.get("http://localhost:8080/api/trades", {
+    params: { serviceName, sourceIds, page, size, sortField, sortOrder },
+  });
+  return data;
+};
+
+const TradeTable = () => {
+  const [serviceName, setServiceName] = useState(null);
+  const [sourceIds, setSourceIds] = useState([]);
+  const [page, setPage] = useState(0);
+  const [sortField, setSortField] = useState(null);
+  const [sortOrder, setSortOrder] = useState(null);
+  const pageSize = 10;
+
+  const { data, isLoading } = useQuery(
+    ["trades", serviceName, sourceIds, page, pageSize, sortField, sortOrder],
+    fetchTrades,
+    { enabled: !!serviceName && sourceIds.length > 0 }
+  );
+
+  const columns = data?.header.map((header) => ({
+    title: header.columnName.toUpperCase(),
+    dataIndex: header.columnName,
+    key: header.columnName,
+    sorter: true, // Enable sorting
+    onHeaderCell: () => ({
+      onClick: () => {
+        setSortField(header.columnName);
+        setSortOrder(sortOrder === "ascend" ? "descend" : "ascend");
+      },
+    }),
+  }));
+
+  return (
+    <div style={{ padding: "20px" }}>
+      <Select
+        placeholder="Select Service"
+        style={{ width: 200, marginRight: 10 }}
+        onChange={setServiceName}
+      >
+        <Option value="Service1">Service1</Option>
+        <Option value="Service2">Service2</Option>
+      </Select>
+
+      <Input
+        placeholder="Enter Source IDs (comma-separated)"
+        style={{ width: 300, marginRight: 10 }}
+        onChange={(e) => setSourceIds(e.target.value.split(","))}
+      />
+
+      <Button type="primary" onClick={() => setPage(0)}>
+        Search
+      </Button>
+
+      <Table
+        columns={columns}
+        dataSource={data?.data}
+        loading={isLoading}
+        rowKey="id"
+        pagination={{
+          current: page + 1,
+          pageSize,
+          total: data?.total,
+          onChange: (p) => setPage(p - 1),
+        }}
+        onChange={(pagination, filters, sorter) => {
+          setSortField(sorter.field);
+          setSortOrder(sorter.order);
+        }}
+        style={{ marginTop: 20 }}
+      />
+    </div>
+  );
+};
+
+export default TradeTable;
