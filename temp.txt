@@ -8,7 +8,7 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/trades")
-@CrossOrigin(origins = "*") // Allow frontend requests
+@CrossOrigin(origins = "*")
 public class TradeController {
 
     @Autowired
@@ -21,169 +21,41 @@ public class TradeController {
         @RequestParam int page,
         @RequestParam int size
     ) {
-        int offset = page * size; // Calculate pagination offset
+        int offset = page * size;
+        int limit = size;
 
-        // Fetch data
-        String sql = "SELECT * FROM tradeview WHERE servicename = ? AND source_id IN (" +
-                     String.join(",", Collections.nCopies(sourceIds.size(), "?")) +
-                     ") LIMIT ? OFFSET ?";
+        // Constructing the Oracle SQL query with pagination
+        String sql = "SELECT * FROM (" +
+                     "    SELECT t.*, ROWNUM AS rn FROM (" +
+                     "        SELECT * FROM tradeview WHERE servicename = ? " +
+                     "        AND source_id IN (" + String.join(",", Collections.nCopies(sourceIds.size(), "?")) + ") " +
+                     "        ORDER BY trade_date DESC" +
+                     "    ) t WHERE ROWNUM <= ?" +
+                     ") WHERE rn > ?";
 
         List<Object> params = new ArrayList<>();
         params.add(serviceName);
         params.addAll(sourceIds);
-        params.add(size);
-        params.add(offset);
+        params.add(offset + limit); // Upper limit
+        params.add(offset); // Lower limit
 
         List<Map<String, Object>> result = jdbcTemplate.queryForList(sql, params.toArray());
 
-        // Generate dynamic headers
+        // Generating dynamic headers
         List<Map<String, String>> headers = new ArrayList<>();
         if (!result.isEmpty()) {
             for (String key : result.get(0).keySet()) {
-                Map<String, String> header = new HashMap<>();
-                header.put("columnName", key);
-                headers.add(header);
+                if (!key.equals("RN")) { // Ignore row number column
+                    Map<String, String> header = new HashMap<>();
+                    header.put("columnName", key);
+                    headers.add(header);
+                }
             }
         }
 
-        // Count total records for pagination
-        String countSql = "SELECT COUNT(*) FROM tradeview WHERE servicename = ? AND source_id IN (" +
-                          String.join(",", Collections.nCopies(sourceIds.size(), "?")) + ")";
+        // Getting the total count of records
+        String countSql = "SELECT COUNT(*) FROM tradeview WHERE servicename = ? " +
+                          "AND source_id IN (" + String.join(",", Collections.nCopies(sourceIds.size(), "?")) + ")";
         int total = jdbcTemplate.queryForObject(countSql, Integer.class, params.subList(0, params.size() - 2).toArray());
 
-        // Build response
-        Map<String, Object> response = new HashMap<>();
-        response.put("header", headers);
-        response.put("data", result);
-        response.put("total", total);
-        response.put("page", page);
-        response.put("size", size);
-
-        return response;
-    }
-}
-import React, { useState, useMemo } from "react";
-import { Table, Select, Input, Button } from "antd";
-import { useQuery } from "react-query";
-import axios from "axios";
-
-const { Option } = Select;
-
-const fetchTrades = async ({ queryKey }) => {
-  const [, serviceName, sourceIds, page, size] = queryKey;
-  if (!serviceName || sourceIds.length === 0) return { header: [], data: [], total: 0 };
-
-  const { data } = await axios.get("http://localhost:8080/api/trades", {
-    params: { serviceName, sourceIds, page, size },
-  });
-  return data;
-};
-
-const TradeTable = () => {
-  const [serviceName, setServiceName] = useState(null);
-  const [sourceIds, setSourceIds] = useState([]);
-  const [page, setPage] = useState(0);
-  const pageSize = 10;
-  const [searchText, setSearchText] = useState("");
-  const [sortColumn, setSortColumn] = useState(null);
-  const [sortOrder, setSortOrder] = useState(null);
-
-  const { data, isLoading } = useQuery(
-    ["trades", serviceName, sourceIds, page, pageSize],
-    fetchTrades,
-    { enabled: !!serviceName && sourceIds.length > 0 }
-  );
-
-  // Handle sorting logic
-  const sortedData = useMemo(() => {
-    if (!sortColumn || !data?.data) return data?.data || [];
-
-    return [...data.data].sort((a, b) => {
-      const aValue = a[sortColumn];
-      const bValue = b[sortColumn];
-
-      if (typeof aValue === "number" && typeof bValue === "number") {
-        return sortOrder === "ascend" ? aValue - bValue : bValue - aValue;
-      }
-
-      return sortOrder === "ascend"
-        ? String(aValue).localeCompare(String(bValue))
-        : String(bValue).localeCompare(String(aValue));
-    });
-  }, [data?.data, sortColumn, sortOrder]);
-
-  // Handle search filter logic
-  const filteredData = useMemo(() => {
-    if (!searchText) return sortedData;
-
-    return sortedData.filter((row) =>
-      Object.values(row).some((value) =>
-        String(value).toLowerCase().includes(searchText.toLowerCase())
-      )
-    );
-  }, [sortedData, searchText]);
-
-  // Generate table columns dynamically with sorting
-  const columns = data?.header.map((header) => ({
-    title: header.columnName.toUpperCase(),
-    dataIndex: header.columnName,
-    key: header.columnName,
-    sorter: true,
-    sortOrder: sortColumn === header.columnName ? sortOrder : null,
-    onHeaderCell: () => ({
-      onClick: () => {
-        if (sortColumn === header.columnName) {
-          setSortOrder(sortOrder === "ascend" ? "descend" : "ascend");
-        } else {
-          setSortColumn(header.columnName);
-          setSortOrder("ascend");
-        }
-      },
-    }),
-  }));
-
-  return (
-    <div style={{ padding: "20px" }}>
-      <Select
-        placeholder="Select Service"
-        style={{ width: 200, marginRight: 10 }}
-        onChange={setServiceName}
-      >
-        <Option value="Service1">Service1</Option>
-        <Option value="Service2">Service2</Option>
-      </Select>
-
-      <Input
-        placeholder="Enter Source IDs (comma-separated)"
-        style={{ width: 300, marginRight: 10 }}
-        onChange={(e) => setSourceIds(e.target.value.split(","))}
-      />
-
-      <Button type="primary" onClick={() => setPage(0)}>
-        Search
-      </Button>
-
-      <Input
-        placeholder="Search in table..."
-        style={{ width: 300, marginLeft: 10, marginBottom: 10 }}
-        onChange={(e) => setSearchText(e.target.value)}
-      />
-
-      <Table
-        columns={columns}
-        dataSource={filteredData}
-        loading={isLoading}
-        rowKey="id"
-        pagination={{
-          current: page + 1,
-          pageSize,
-          total: data?.total,
-          onChange: (p) => setPage(p - 1),
-        }}
-        style={{ marginTop: 20 }}
-      />
-    </div>
-  );
-};
-
-export default TradeTable;
+        // Preparing res
