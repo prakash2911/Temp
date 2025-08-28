@@ -1,1 +1,517 @@
-To design and develop a high-performance, user-friendly Transaction Monitoring UI that empowers RTB and support teams to efficiently access, audit, and investigate trade transactions across multiple systems (CATS, Atlas, Memphis, etc.). The UI will support real-time querying, seamless multi-source integration, and scalable data handling—enabling users to retrieve and analyze millions of trade records with speed and precision, while ensuring full auditability and compliance.
+pipeline {
+    agent any
+
+    parameters {
+        // Main deployment toggles
+        booleanParam(name: 'DEPLOY_APAAS', defaultValue: true, description: 'Deploy Apaas components')
+        booleanParam(name: 'DEPLOY_AUTOSYS', defaultValue: true, description: 'Deploy Autosys components')
+        
+        // Configuration parameters
+        choice(name: 'DEPLOY_ENV', choices: ['dev', 'qa', 'staging', 'prod'], description: 'Target deployment environment')
+        string(name: 'RELEASE_VERSION', defaultValue: '1.0.0', description: 'Release version to deploy')
+        
+        // Job-specific parameters (leave empty to skip that job)
+        text(name: 'JAR_DEPLOYMENT_PARAMS', defaultValue: '', description: 'Parameters for jar deployment (JSON format or key=value pairs). Leave empty to skip jar deployment.')
+        text(name: 'JIL_DEPLOYMENT_PARAMS', defaultValue: '', description: 'Parameters for JIL deployment. Leave empty to skip JIL deployment.')
+        text(name: 'CONFIG_DEPLOYMENT_PARAMS', defaultValue: '', description: 'Parameters for config deployment. Leave empty to skip config deployment.')
+        text(name: 'PODS_DEPLOYMENT_PARAMS', defaultValue: '', description: 'Parameters for pods deployment. Leave empty to skip pods deployment.')
+        text(name: 'SHELL_SCRIPT_PARAMS', defaultValue: '', description: 'Shell script parameters or commands. Leave empty to skip shell execution.')
+        
+        // Advanced options
+        booleanParam(name: 'SKIP_VALIDATION', defaultValue: false, description: 'Skip validation steps (not recommended for prod)')
+        booleanParam(name: 'FAIL_FAST', defaultValue: true, description: 'Stop pipeline on first failure')
+        booleanParam(name: 'AUTO_SKIP_EMPTY', defaultValue: true, description: 'Automatically skip jobs with empty parameters')
+    }
+
+    environment {
+        DEPLOYMENT_REPORT = ""
+        PIPELINE_START_TIME = "${System.currentTimeMillis()}"
+        NOTIFICATION_CHANNEL = "#deployment-alerts"
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 1, unit: 'HOURS')
+        skipStagesAfterUnstable()
+        parallelsAlwaysFailFast()
+    }
+
+    stages {
+        stage('Pre-deployment Validation') {
+            steps {
+                script {
+                    validateParameters()
+                    logDeploymentStart()
+                }
+            }
+        }
+
+        stage('Apaas Deployment') {
+            when { 
+                allOf {
+                    expression { params.DEPLOY_APAAS }
+                    not { expression { currentBuild.result == 'FAILURE' } }
+                }
+            }
+            stages {
+                stage('Apaas Config Phase') {
+                    parallel {
+                        stage('Config Deployment') {
+                            steps {
+                                script {
+                                    deploymentStep(
+                                        jobName: 'apaas-config-deployment',
+                                        displayName: 'Config Deployment',
+                                        parameters: getCommonParameters(),
+                                        critical: true
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                stage('Apaas Validation Phase') {
+                    when { not { params.SKIP_VALIDATION } }
+                    steps {
+                        script {
+                            deploymentStep(
+                                jobName: 'apaas-config-validation',
+                                displayName: 'Config Validation',
+                                parameters: [string(name: 'DEPLOY_ENV', value: params.DEPLOY_ENV)],
+                                critical: true
+                            )
+                        }
+                    }
+                }
+
+                stage('Apaas Application Phase') {
+                    parallel {
+                        stage('Pods Deployment') {
+                            steps {
+                                script {
+                                    deploymentStep(
+                                        jobName: 'apaas-pods-deployment',
+                                        displayName: 'Pods Deployment',
+                                        parameters: getCommonParameters(),
+                                        critical: true
+                                    )
+                                }
+                            }
+                        }
+                        
+                        stage('Image Validation') {
+                            when { not { params.SKIP_VALIDATION } }
+                            steps {
+                                script {
+                                    deploymentStep(
+                                        jobName: 'apaas-image-validation',
+                                        displayName: 'Image Validation',
+                                        parameters: getCommonParameters(),
+                                        critical: false
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                stage('Apaas Post-deployment') {
+                    when { not { params.SKIP_VALIDATION } }
+                    steps {
+                        script {
+                            deploymentStep(
+                                jobName: 'apaas-version-validation',
+                                displayName: 'Version Validation',
+                                parameters: [string(name: 'RELEASE_VERSION', value: params.RELEASE_VERSION)],
+                                critical: false
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Autosys Deployment') {
+            when { 
+                allOf {
+                    expression { params.DEPLOY_AUTOSYS }
+                    not { expression { currentBuild.result == 'FAILURE' } }
+                }
+            }
+            parallel {
+                stage('Jar Pipeline') {
+                    when { expression { shouldExecuteJob('JAR_DEPLOYMENT_PARAMS') } }
+                    stages {
+                        stage('Jar Deployment') {
+                            steps {
+                                script {
+                                    deploymentStep(
+                                        jobName: 'autosys-jar-deployment',
+                                        displayName: 'Jar Deployment',
+                                        parameters: buildJobParameters('JAR_DEPLOYMENT_PARAMS'),
+                                        critical: true
+                                    )
+                                }
+                            }
+                        }
+                        
+                        stage('Jar Validation') {
+                            when { not { params.SKIP_VALIDATION } }
+                            steps {
+                                script {
+                                    deploymentStep(
+                                        jobName: 'autosys-jar-version-validation',
+                                        displayName: 'Jar Version Validation',
+                                        parameters: [string(name: 'RELEASE_VERSION', value: params.RELEASE_VERSION)],
+                                        critical: false
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                stage('JIL Pipeline') {
+                    when { expression { shouldExecuteJob('JIL_DEPLOYMENT_PARAMS') } }
+                    stages {
+                        stage('JIL Deployment') {
+                            steps {
+                                script {
+                                    deploymentStep(
+                                        jobName: 'autosys-jil-deployment',
+                                        displayName: 'JIL Deployment',
+                                        parameters: buildJobParameters('JIL_DEPLOYMENT_PARAMS'),
+                                        critical: true
+                                    )
+                                }
+                            }
+                        }
+                        
+                        stage('JIL Validation') {
+                            when { not { params.SKIP_VALIDATION } }
+                            steps {
+                                script {
+                                    deploymentStep(
+                                        jobName: 'autosys-jil-validation',
+                                        displayName: 'JIL Validation',
+                                        parameters: [string(name: 'DEPLOY_ENV', value: params.DEPLOY_ENV)],
+                                        critical: false
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Post-deployment Health Check') {
+            when { 
+                allOf {
+                    expression { params.DEPLOY_ENV in ['staging', 'prod'] }
+                    not { expression { currentBuild.result == 'FAILURE' } }
+                }
+            }
+            parallel {
+                stage('Application Health Check') {
+                    steps {
+                        script {
+                            deploymentStep(
+                                jobName: 'health-check-applications',
+                                displayName: 'Application Health Check',
+                                parameters: [string(name: 'DEPLOY_ENV', value: params.DEPLOY_ENV)],
+                                critical: false
+                            )
+                        }
+                    }
+                }
+                
+                stage('Integration Tests') {
+                    steps {
+                        script {
+                            deploymentStep(
+                                jobName: 'integration-tests',
+                                displayName: 'Integration Tests',
+                                parameters: getCommonParameters(),
+                                critical: false
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                generateFinalReport()
+                archiveArtifacts(artifacts: 'deployment-report.txt', allowEmptyArchive: true)
+            }
+        }
+        
+        success {
+            script {
+                if (params.DEPLOY_ENV in ['staging', 'prod']) {
+                    sendNotification('SUCCESS', '✅ Production deployment completed successfully!')
+                }
+            }
+        }
+        
+        failure {
+            script {
+                sendNotification('FAILURE', '❌ Deployment pipeline failed!')
+            }
+        }
+        
+        unstable {
+            script {
+                sendNotification('UNSTABLE', '⚠️ Deployment completed with warnings!')
+            }
+        }
+    }
+}
+
+// ================================
+// HELPER FUNCTIONS
+// ================================
+
+def validateParameters() {
+    if (!params.DEPLOY_APAAS && !params.DEPLOY_AUTOSYS) {
+        error("❌ At least one deployment option (APAAS or AUTOSYS) must be enabled!")
+    }
+    
+    if (params.DEPLOY_ENV == 'prod' && params.SKIP_VALIDATION) {
+        error("❌ Validation cannot be skipped for production deployments!")
+    }
+    
+    // Check if at least one job has parameters when AUTO_SKIP_EMPTY is enabled
+    if (params.AUTO_SKIP_EMPTY) {
+        def hasValidJob = false
+        ['JAR_DEPLOYMENT_PARAMS', 'JIL_DEPLOYMENT_PARAMS', 'CONFIG_DEPLOYMENT_PARAMS', 'PODS_DEPLOYMENT_PARAMS', 'SHELL_SCRIPT_PARAMS'].each { param ->
+            if (params[param]?.trim()) {
+                hasValidJob = true
+            }
+        }
+        
+        if (!hasValidJob) {
+            echo "⚠️ Warning: All job-specific parameters are empty. Pipeline will run with default common parameters only."
+        }
+    }
+    
+    echo "✅ Parameter validation completed"
+}
+
+def shouldExecuteJob(String paramName) {
+    if (!params.AUTO_SKIP_EMPTY) {
+        return true // Execute all jobs if auto-skip is disabled
+    }
+    
+    def paramValue = params[paramName]?.trim()
+    def shouldExecute = paramValue && paramValue.length() > 0
+    
+    if (!shouldExecute) {
+        echo "⏭️ Skipping job - ${paramName} is empty"
+    }
+    
+    return shouldExecute
+}
+
+def buildJobParameters(String paramName) {
+    def commonParams = getCommonParameters()
+    def customParamValue = params[paramName]?.trim()
+    
+    if (!customParamValue) {
+        return commonParams
+    }
+    
+    try {
+        // Try to parse as JSON first
+        def jsonParams = readJSON text: customParamValue
+        def finalParams = []
+        
+        // Add common parameters first
+        finalParams.addAll(commonParams)
+        
+        // Add custom parameters from JSON
+        jsonParams.each { key, value ->
+            finalParams.add(string(name: key, value: value.toString()))
+        }
+        
+        return finalParams
+        
+    } catch (Exception e) {
+        // If JSON parsing fails, try key=value format
+        try {
+            def finalParams = []
+            finalParams.addAll(commonParams)
+            
+            customParamValue.split('\n').each { line ->
+                line = line.trim()
+                if (line && line.contains('=')) {
+                    def parts = line.split('=', 2)
+                    def key = parts[0].trim()
+                    def value = parts.length > 1 ? parts[1].trim() : ''
+                    finalParams.add(string(name: key, value: value))
+                }
+            }
+            
+            return finalParams
+            
+        } catch (Exception e2) {
+            echo "⚠️ Warning: Could not parse custom parameters for ${paramName}. Using common parameters only."
+            echo "Error: ${e2.getMessage()}"
+            return commonParams
+        }
+    }
+}
+
+def executeShellScript() {
+    def shellParams = params.SHELL_SCRIPT_PARAMS?.trim()
+    if (!shellParams) {
+        echo "⏭️ No shell script parameters provided, skipping shell execution"
+        return
+    }
+    
+    def startTime = System.currentTimeMillis()
+    def stepName = "Shell Script Execution"
+    
+    try {
+        echo "🔄 Starting: ${stepName}"
+        echo "📜 Script content:"
+        echo "----------------------------------------"
+        echo shellParams
+        echo "----------------------------------------"
+        
+        // Execute the shell script
+        def result = sh(script: shellParams, returnStatus: true)
+        
+        def duration = System.currentTimeMillis() - startTime
+        def durationStr = "${Math.round(duration/1000)}s"
+        
+        if (result == 0) {
+            def successMsg = "✅ ${stepName}: SUCCESS (${durationStr})"
+            echo successMsg
+            env.DEPLOYMENT_REPORT += "${successMsg}\n"
+        } else {
+            def failureMsg = "❌ ${stepName}: FAILED with exit code ${result} (${durationStr})"
+            echo failureMsg
+            env.DEPLOYMENT_REPORT += "${failureMsg}\n"
+            
+            if (params.FAIL_FAST) {
+                error("Shell script execution failed with exit code ${result}")
+            } else {
+                unstable("Shell script execution failed but continuing...")
+            }
+        }
+        
+    } catch (Exception e) {
+        def duration = System.currentTimeMillis() - startTime
+        def durationStr = "${Math.round(duration/1000)}s"
+        def errorMsg = "💥 ${stepName}: EXCEPTION (${durationStr}) - ${e.getMessage()}"
+        
+        echo errorMsg
+        env.DEPLOYMENT_REPORT += "${errorMsg}\n"
+        
+        if (params.FAIL_FAST) {
+            throw e
+        } else {
+            echo "⚠️ Shell script failed, but continuing..."
+        }
+    }
+}
+
+def logDeploymentStart() {
+    def executionSummary = getExecutionSummary()
+    
+    def startMessage = """
+    ==================== DEPLOYMENT STARTED ====================
+    🚀 Environment: ${params.DEPLOY_ENV}
+    📦 Version: ${params.RELEASE_VERSION}
+    🏗️  Apaas: ${params.DEPLOY_APAAS ? 'Enabled' : 'Disabled'}
+    ⚙️  Autosys: ${params.DEPLOY_AUTOSYS ? 'Enabled' : 'Disabled'}
+    ⏰ Started: ${new Date()}
+    
+    📋 JOB EXECUTION PLAN:
+    ${executionSummary}
+    =============================================================
+    """
+    echo startMessage
+    env.DEPLOYMENT_REPORT += startMessage + "\n"
+}
+
+def getExecutionSummary() {
+    def summary = []
+    
+    if (params.DEPLOY_APAAS) {
+        summary.add("🔹 APAAS DEPLOYMENT:")
+        summary.add("   Config Deployment: ${shouldExecuteJob('CONFIG_DEPLOYMENT_PARAMS') ? '✅ Will Execute' : '⏭️ Will Skip (empty params)'}")
+        summary.add("   Pods Deployment: ${shouldExecuteJob('PODS_DEPLOYMENT_PARAMS') ? '✅ Will Execute' : '⏭️ Will Skip (empty params)'}")
+        summary.add("   Shell Script: ${shouldExecuteJob('SHELL_SCRIPT_PARAMS') ? '✅ Will Execute' : '⏭️ Will Skip (empty params)'}")
+        summary.add("   Validation: ${params.SKIP_VALIDATION ? '⏭️ Skipped' : '✅ Enabled'}")
+    }
+    
+    if (params.DEPLOY_AUTOSYS) {
+        summary.add("🔹 AUTOSYS DEPLOYMENT:")
+        summary.add("   Jar Deployment: ${shouldExecuteJob('JAR_DEPLOYMENT_PARAMS') ? '✅ Will Execute' : '⏭️ Will Skip (empty params)'}")
+        summary.add("   JIL Deployment: ${shouldExecuteJob('JIL_DEPLOYMENT_PARAMS') ? '✅ Will Execute' : '⏭️ Will Skip (empty params)'}")
+        summary.add("   Validation: ${params.SKIP_VALIDATION ? '⏭️ Skipped' : '✅ Enabled'}")
+    }
+    
+    return summary.join('\n    ')
+}
+
+def getCommonParameters() {
+    return [
+        string(name: 'RELEASE_VERSION', value: params.RELEASE_VERSION),
+        string(name: 'DEPLOY_ENV', value: params.DEPLOY_ENV)
+    ]
+}
+
+def deploymentStep(Map config) {
+    def stepName = config.displayName ?: config.jobName
+    def startTime = System.currentTimeMillis()
+    
+    try {
+        echo "🔄 Starting: ${stepName}"
+        
+        def buildResult = build(
+            job: config.jobName,
+            parameters: config.parameters ?: [],
+            propagate: false,
+            wait: true
+        )
+        
+        def duration = System.currentTimeMillis() - startTime
+        def durationStr = "${Math.round(duration/1000)}s"
+        
+        if (buildResult.result == 'SUCCESS') {
+            def successMsg = "✅ ${stepName}: SUCCESS (${durationStr})"
+            echo successMsg
+            env.DEPLOYMENT_REPORT += "${successMsg}\n"
+        } else {
+            def failureMsg = "❌ ${stepName}: ${buildResult.result} (${durationStr})"
+            echo failureMsg
+            env.DEPLOYMENT_REPORT += "${failureMsg}\n"
+            
+            if (config.critical && params.FAIL_FAST) {
+                error("Critical step '${stepName}' failed. Stopping pipeline.")
+            } else if (config.critical) {
+                unstable("Critical step '${stepName}' failed but continuing...")
+            }
+        }
+        
+    } catch (Exception e) {
+        def duration = System.currentTimeMillis() - startTime
+        def durationStr = "${Math.round(duration/1000)}s"
+        def errorMsg = "💥 ${stepName}: EXCEPTION (${durationStr}) - ${e.getMessage()}"
+        
+        echo errorMsg
+        env.DEPLOYMENT_REPORT += "${errorMsg}\n"
+        
+        if (config.critical) {
+            throw e
+        } else {
+            echo "⚠️ Non-critical step failed, continuing..."
+     
