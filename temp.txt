@@ -1,4 +1,5 @@
-Maintained strong focus on operational risk management and control by proactively identifying and addressing issues.
-Created a Kibana dashboard for monitoring exceptions in the UTIF-UK flow, enabling early detection of anomalies and improved issue resolution.
-Regularly generated reports to analyze recurring problems and ensure preventive measures are in place, strengthening overall system stability and control.
+Consistently demonstrated Barclays’ Mindset by taking full ownership of the UTIF-UK flow, proactively identifying issues, and implementing sustainable fixes.
+Showed drive to deliver excellence through timely, high-quality development across frontend and backend with zero failures.
+Exhibited stewardship and resilience by creating automation, improving CI/CD pipelines, and building monitoring solutions like the Kibana dashboard to strengthen control and reduce operational risks.
+Maintained a growth mindset, continuously improving processes and adopting new technologies like JDK 21 and GitLab CI/CD to enhance system efficiency and stability.
 
