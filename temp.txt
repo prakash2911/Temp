@@ -1,7 +1,4 @@
-Successfully delivered key objectives across frontend and backend.
-Completed FIF scale testing, migrated new report without issues, and implemented automation testing to improve quality and efficiency.
-Developed the EPJLM dashboard and began migrating it to a micro-frontend architecture.
-Created and optimized multiple deployment pipelines and fixed issues in the UTIF-UK flow.
-Ensured all services are JDK 21 compliant and delivered BAU changes without any failures.
-Currently working on creating a CI/CD pipeline in GitLab for the UI dashboard as part of future objectives.
+Maintained strong focus on operational risk management and control by proactively identifying and addressing issues.
+Created a Kibana dashboard for monitoring exceptions in the UTIF-UK flow, enabling early detection of anomalies and improved issue resolution.
+Regularly generated reports to analyze recurring problems and ensure preventive measures are in place, strengthening overall system stability and control.
 
