@@ -1,5 +1,58 @@
-Consistently demonstrated Barclays’ Mindset by taking full ownership of the UTIF-UK flow, proactively identifying issues, and implementing sustainable fixes.
-Showed drive to deliver excellence through timely, high-quality development across frontend and backend with zero failures.
-Exhibited stewardship and resilience by creating automation, improving CI/CD pipelines, and building monitoring solutions like the Kibana dashboard to strengthen control and reduce operational risks.
-Maintained a growth mindset, continuously improving processes and adopting new technologies like JDK 21 and GitLab CI/CD to enhance system efficiency and stability.
+#!/bin/bash
+# Validate latest develop commit against feature/techstackupgrade
 
+set -e
+
+TECH_BRANCH="origin/feature/techstackupgrade"
+DEV_BRANCH="origin/develop"
+
+echo "Fetching latest branches..."
+git fetch origin
+
+echo "Comparing '$DEV_BRANCH' vs '$TECH_BRANCH'..."
+
+# Get commits that are in develop but not in feature/techstackupgrade
+MISSING_COMMITS=$(git log ${TECH_BRANCH}..${DEV_BRANCH} --oneline)
+
+if [ -z "$MISSING_COMMITS" ]; then
+  echo "✅ No commits ahead in develop — branches are in sync."
+  exit 0
+fi
+
+# Ensure only one commit is ahead
+NUM_COMMITS=$(echo "$MISSING_COMMITS" | wc -l)
+if [ "$NUM_COMMITS" -ne 1 ]; then
+  echo "❌ develop is ahead by $NUM_COMMITS commits — expected only one."
+  echo "$MISSING_COMMITS"
+  exit 1
+fi
+
+# Extract latest missing commit hash and message
+LATEST_COMMIT=$(git log ${TECH_BRANCH}..${DEV_BRANCH} -1 --format="%H")
+COMMIT_MSG=$(git log -1 --format="%s" $LATEST_COMMIT)
+
+echo "Found one new commit in develop:"
+echo "  → Hash: $LATEST_COMMIT"
+echo "  → Message: \"$COMMIT_MSG\""
+
+# Check commit message for UTIF-5687
+if echo "$COMMIT_MSG" | grep -qi "UTIF-5687"; then
+  echo "✅ Commit message contains 'UTIF-5687'"
+else
+  echo "❌ Commit message does NOT contain 'UTIF-5687'"
+  exit 1
+fi
+
+# Check changed files
+CHANGED_FILES=$(git diff --name-only ${TECH_BRANCH}..${DEV_BRANCH})
+
+# If the only changed file is pom.xml, it's acceptable
+if [ "$CHANGED_FILES" == "pom.xml" ]; then
+  echo "✅ Only 'pom.xml' changed"
+  echo "✅ Validation successful"
+  exit 0
+else
+  echo "❌ Unexpected files changed:"
+  echo "$CHANGED_FILES"
+  exit 1
+fi
